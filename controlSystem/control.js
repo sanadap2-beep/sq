@@ -1,36 +1,43 @@
 // =====================================================================
-// controlSystem/control.js - نظام التحكم في الصلاحيات
+// controlSystem/control.js - نظام التحكم في الصلاحيات (V2.0)
 // =====================================================================
-
+// التعديلات:
+// - إصلاح خطأ path غير مستورد
+// - إضافة دعم الميزات الجديدة (features.js)
+// - دعم الاشتراكات والمسؤولين والصيانة
+// =====================================================================
 const fs = require("fs");
+const path = require("path"); // ✅ الإصلاح: استيراد path
 const config = require("../config");
+const features = require("./features"); // ✅ ربط الميزات الجديدة
 
 // =====================================================================
-// دوال القراءة والكتابة الآمنة
+// دوال القراءة والكتابة الآمنة (مُحسّنة)
 // =====================================================================
-
 function safeReadJSON(filePath, defaultValue = {}) {
   try {
-    if (fs.existsSync(filePath)) {
-      return JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const fullPath = path.isAbsolute(filePath) ? filePath : path.join(__dirname, "..", filePath);
+    if (fs.existsSync(fullPath)) {
+      return JSON.parse(fs.readFileSync(fullPath, "utf8"));
     }
     return defaultValue;
   } catch (err) {
-    console.error(`Error reading ${filePath}: ${err.message}`);
+    console.error(`[control] خطأ قراءة ${filePath}: ${err.message}`);
     return defaultValue;
   }
 }
 
 function safeWriteJSON(filePath, data) {
   try {
-    const dir = path.dirname(filePath);
+    const fullPath = path.isAbsolute(filePath) ? filePath : path.join(__dirname, "..", filePath);
+    const dir = path.dirname(fullPath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
+    fs.writeFileSync(fullPath, JSON.stringify(data, null, 2), "utf8");
     return true;
   } catch (err) {
-    console.error(`Error writing ${filePath}: ${err.message}`);
+    console.error(`[control] خطأ كتابة ${filePath}: ${err.message}`);
     return false;
   }
 }
@@ -38,47 +45,76 @@ function safeWriteJSON(filePath, data) {
 // =====================================================================
 // دوال التحقق من الصلاحيات
 // =====================================================================
-
 function getDB() {
   return safeReadJSON("./storage/resellers.json", { users: [] });
 }
 
 function isOwner(userId) {
-  return userId.toString() === config.ownerId.toString();
+  return String(userId) === String(config.ownerId);
 }
 
 function isReseller(userId) {
   const db = getDB();
-  return db.users.includes(userId.toString());
+  return db.users && db.users.includes(String(userId));
 }
 
+// ✅ جديد: التحقق من الوضع المجاني (من features.js)
 function isFreeMode() {
-  const settings = safeReadJSON("./database/settings.json", { freeMode: false });
-  return settings.freeMode === true;
+  return features.isFreeMode();
 }
 
-function hasAccess(userId) {
-  const settings = safeReadJSON("./database/settings.json", { freeMode: false });
-  
-  if (settings.freeMode) return true;
-  if (isOwner(userId)) return true;
-  if (isReseller(userId)) return true;
+// ✅ جديد: التحقق من وضع الصيانة
+function isMaintenance() {
+  return features.isMaintenance();
+}
 
+function getMaintenanceMessage() {
+  return features.getMaintenanceMessage();
+}
+
+// ✅ جديد: التحقق من المسؤول
+function isAdmin(userId) {
+  return features.isAdmin(userId);
+}
+
+function hasPermission(userId, permission) {
+  return features.hasAdminPermission(userId, permission);
+}
+
+// ✅ محدّث: التحقق من الوصول (يدعم الاشتراكات)
+function hasAccess(userId) {
+  // الوضع المجاني يسمح للجميع
+  if (isFreeMode()) return true;
+  
+  // المالك دائماً لديه صلاحية
+  if (isOwner(userId)) return true;
+  
+  // الموزعون
+  if (isReseller(userId)) return true;
+  
+  // المسؤولون
+  if (isAdmin(userId)) return true;
+  
+  // المستخدمون الذين لديهم وصول مباشر
   let accessDb = safeReadJSON("./storage/access.json", { users: [] });
   const users = Array.isArray(accessDb.users) ? accessDb.users : [];
-  if (users.includes(userId.toString())) return true;
-
+  if (users.includes(String(userId))) return true;
+  
+  // ✅ جديد: التحقق من الاشتراكات
+  const sub = features.checkSubscription(userId);
+  if (sub.active) return true;
+  
   return false;
 }
 
 // =====================================================================
-// دوال إدارة الراسيلرز
+// دوال إدارة الراسيلرز (الموزعين)
 // =====================================================================
-
 function addReseller(targetId) {
   const db = getDB();
-  if (!db.users.includes(targetId)) {
-    db.users.push(targetId);
+  const id = String(targetId);
+  if (!db.users.includes(id)) {
+    db.users.push(id);
     safeWriteJSON("./storage/resellers.json", db);
     return true;
   }
@@ -87,7 +123,8 @@ function addReseller(targetId) {
 
 function removeReseller(targetId) {
   const db = getDB();
-  const filtered = db.users.filter(id => id !== targetId);
+  const id = String(targetId);
+  const filtered = db.users.filter(u => u !== id);
   if (filtered.length !== db.users.length) {
     db.users = filtered;
     safeWriteJSON("./storage/resellers.json", db);
@@ -104,11 +141,11 @@ function getResellers() {
 // =====================================================================
 // دوال إدارة الوصول
 // =====================================================================
-
 function addAccess(userId) {
   const access = safeReadJSON("./storage/access.json", { users: [] });
-  if (!access.users.includes(userId)) {
-    access.users.push(userId);
+  const id = String(userId);
+  if (!access.users.includes(id)) {
+    access.users.push(id);
     safeWriteJSON("./storage/access.json", access);
     return true;
   }
@@ -117,7 +154,8 @@ function addAccess(userId) {
 
 function removeAccess(userId) {
   const access = safeReadJSON("./storage/access.json", { users: [] });
-  const filtered = access.users.filter(id => id !== userId);
+  const id = String(userId);
+  const filtered = access.users.filter(u => u !== id);
   if (filtered.length !== access.users.length) {
     access.users = filtered;
     safeWriteJSON("./storage/access.json", access);
@@ -134,7 +172,6 @@ function getAccessList() {
 // =====================================================================
 // دوال الحظر والقوائم البيضاء
 // =====================================================================
-
 function isBlocked(number) {
   const blacklist = safeReadJSON("./storage/blacklist.json", []);
   return blacklist.includes(number);
@@ -194,29 +231,41 @@ function removeWhitelist(number) {
 }
 
 // =====================================================================
-// دوال الإحصائيات
+// دوال الإحصائيات (مُحسّنة)
 // =====================================================================
-
 function getStats() {
+  const featureStats = features.getStats();
   return {
     ownerId: config.ownerId,
     freeMode: isFreeMode(),
+    maintenanceMode: isMaintenance(),
     resellers: getResellers().length,
     accessUsers: getAccessList().length,
     blacklist: getBlacklist().length,
     whitelist: getWhitelist().length,
+    // ✅ جديد: إحصائيات الميزات
+    codes: featureStats.codes,
+    admins: featureStats.admins,
+    customCommands: featureStats.customCommands
   };
 }
 
 // =====================================================================
 // التصدير
 // =====================================================================
-
 module.exports = {
+  // دوال مساعدة
+  safeReadJSON,
+  safeWriteJSON,
+  
   // الصلاحيات
   isOwner,
   isReseller,
   isFreeMode,
+  isMaintenance,
+  getMaintenanceMessage,
+  isAdmin,
+  hasPermission,
   hasAccess,
   
   // الراسيلرز
