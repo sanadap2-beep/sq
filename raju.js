@@ -291,10 +291,10 @@ Click the ORDER button below to buy`;
 };
 
 // =====================================================================
-// Logging System
+// Logging System - Already defined at line 81, using the first one
 // =====================================================================
 
-const log = {
+const logger = {
   success: (msg) => console.log(chalk.green.bold("✓ ") + chalk.white(msg)),
   error: (msg) => console.log(chalk.red.bold("✗ ") + chalk.white(msg)),
   warning: (msg) => console.log(chalk.yellow.bold("⚠ ") + chalk.white(msg)),
@@ -1905,17 +1905,17 @@ bot.command("reqpair", async (ctx) => {
 
     if (!phone) {
       return await ctx.reply(
-        "⚠️ *Format Salah!*\nContoh:\n`/reqpair 628xxxxxxx`",
+        "⚠️ *تنسيق خاطئ!*\nمثال:\n`/reqpair 628xxxxxxx`",
         { parse_mode: "Markdown" }
       );
     }
 
     const exists = await checkSessionExistsForUser(userId);
     if (exists && waClients[userId]?.status === "open") {
-      return ctx.reply("⚠️ Kamu sudah punya sesi WhatsApp aktif.", { parse_mode: "Markdown" });
+      return ctx.reply("⚠️ لديك جلسة واتساب نشطة بالفعل.", { parse_mode: "Markdown" });
     }
 
-    const waitMessage = await ctx.reply("⏳ *Memproses...*\nMembuat pairing code untukmu...", { parse_mode: "Markdown" });
+    const waitMessage = await ctx.reply("⏳ *جاري المعالجة...*\nإنشاء كود ربط لك...", { parse_mode: "Markdown" });
 
     await initWhatsappForUser(userId, true);
     waClients[userId].waitMessageId = waitMessage.message_id;
@@ -1925,14 +1925,14 @@ bot.command("reqpair", async (ctx) => {
 
     if (!client) {
       await ctx.api.deleteMessage(userId, waitMessage.message_id).catch(() => {});
-      return ctx.reply("❌ Gagal menginisialisasi WhatsApp. Coba lagi nanti.");
+      return ctx.reply("❌ فشل تهيئة واتساب. حاول مرة أخرى لاحقاً.");
     }
 
     if (typeof client.requestPairingCode === "function") {
       const code = await client.requestPairingCode(phone);
       await ctx.api.deleteMessage(userId, waitMessage.message_id).catch(() => {});
       const pairingMessage = await ctx.reply(
-        `✅ *Pairing Code Siap!*\n\n📱 *Nomor:* \`${phone}\`\n🔐 *Kode:* \`${code}\`\n\nMasukkan kode ini di aplikasi WhatsApp agar tersambung.`,
+        `✅ *كود الربط جاهز!*\n\n📱 *الرقم:* \`${phone}\`\n🔐 *الكود:* \`${code}\`\n\nأدخل هذا الكود في تطبيق واتساب للاتصال.`,
         { parse_mode: "Markdown" }
       );
 
@@ -1943,7 +1943,7 @@ bot.command("reqpair", async (ctx) => {
           if (waClients[userId]?.status !== "open") {
             await ctx.api.sendMessage(
               userId,
-              "⏰ *Pairing Code Expired*\nSilahkan minta ulang dengan `/reqpair`.",
+              "⏰ *انتهى وقت الكود*\nيرجى طلب كود جديد باستخدام `/reqpair`.",
               { parse_mode: "Markdown" }
             );
             if (waClients[userId]) {
@@ -1954,14 +1954,275 @@ bot.command("reqpair", async (ctx) => {
         } catch (e) {
           log.error(`Timeout handler for ${userId}: ${e.message}`);
         }
-      }, 60 * 1000);
+      }, 120 * 1000); // Increased to 120 seconds
     } else {
       await ctx.api.deleteMessage(userId, waitMessage.message_id).catch(() => {});
-      return ctx.reply("⚠️ Baileys build kamu tidak support pairing API.");
+      return ctx.reply("⚠️ بناء Baileys الخاص بك لا يدعم واجهة برمجة تطبيقات الربط.");
     }
   } catch (err) {
     log.error(`Pairing failed for ${userId}: ${err.message}`);
-    await ctx.reply("❌ *Gagal Pairing*\nTerjadi kesalahan tak terduga.", { parse_mode: "Markdown" });
+    await ctx.reply("❌ *فشل الربط*\nحدث خطأ غير متوقع.", { parse_mode: "Markdown" });
+  }
+});
+
+// =====================================================================
+// COMMAND: /admin - لوحة تحكم الأدمن
+// =====================================================================
+
+bot.command("admin", async (ctx) => {
+  try {
+    const userId = ctx.from.id.toString();
+    if (!isOwner(userId)) return ctx.reply("❌ هذا الأمر مخصص للمالك فقط!");
+
+    const keyboard = new InlineKeyboard()
+      .row()
+      .webApp("📊 حالة البوت", "admin_status")
+      .webApp("👥 إدارة المستخدمين", "admin_users")
+      .webApp("🔧 الإعدادات", "admin_settings")
+      .webApp("🛑 إيقاف/إعادة تشغيل", "admin_restart");
+
+    await ctx.reply(
+      "👑 *لوحة تحكم الأدمن*\n\n" +
+      "اختر القسم المطلوب:\n" +
+      "• 📊 حالة البوت - عرض الإحصائيات\n" +
+      "• 👥 إدارة المستخدمين - الحظر/السماح\n" +
+      "• 🔧 الإعدادات - تعديل الإعدادات\n" +
+      "• 🛑 إيقاف/إعادة تشغيل - التحكم في البوت",
+      {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      }
+    );
+  } catch (e) {
+    log.error(`Admin command error: ${e.message}`);
+    await ctx.reply("❌ حدث خطأ في لوحة الأدمن.");
+  }
+});
+
+// Handle admin button clicks
+bot.callbackQuery("admin_status", async (ctx) => {
+  try {
+    const userId = ctx.from.id.toString();
+    if (!isOwner(userId)) return ctx.reply("❌ هذا الأمر مخصص للمالك فقط!");
+
+    await ctx.editMessageText(
+      "📊 *حالة البوت*\n\n" +
+      "⏱️ وقت التشغيل: " + formatUptime(process.uptime()) + "\n" +
+      "👥 عدد المستخدمين: " + stats.users.size + "\n" +
+      "📱 الجلسات النشطة: " + stats.getSessionCount() + "\n" +
+      "🔢 إجمالي الأوامر: " + stats.totalCommands + "\n" +
+      "❌ الأخطاء: " + stats.errors,
+      { parse_mode: "Markdown" }
+    );
+    await ctx.answerCallbackQuery();
+  } catch (e) {
+    log.error(`Admin status error: ${e.message}`);
+    await ctx.reply("❌ خطأ في عرض الحالة.");
+  }
+});
+
+bot.callbackQuery("admin_users", async (ctx) => {
+  try {
+    const userId = ctx.from.id.toString();
+    if (!isOwner(userId)) return ctx.reply("❌ هذا الأمر مخصص للمالك فقط!");
+
+    const keyboard = new InlineKeyboard()
+      .row()
+      .webApp("📋 قائمة المحظورين", "admin_blacklist")
+      .webApp("✅ القائمة البيضاء", "admin_whitelist")
+      .row()
+      .webApp("⬅️ رجوع", "admin_back");
+
+    await ctx.editMessageText(
+      "👥 *إدارة المستخدمين*\n\n" +
+      "اختر القائمة المطلوبة:",
+      {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      }
+    );
+    await ctx.answerCallbackQuery();
+  } catch (e) {
+    log.error(`Admin users error: ${e.message}`);
+    await ctx.reply("❌ خطأ في إدارة المستخدمين.");
+  }
+});
+
+bot.callbackQuery("admin_settings", async (ctx) => {
+  try {
+    const userId = ctx.from.id.toString();
+    if (!isOwner(userId)) return ctx.reply("❌ هذا الأمر مخصص للمالك فقط!");
+
+    const keyboard = new InlineKeyboard()
+      .row()
+      .webApp("🔘 الوضع المجاني", "admin_free_mode")
+      .webApp("⏱️ الكولدون", "admin_cooldown")
+      .row()
+      .webApp("🔗 ربط البوتات", "admin_bot_integration")
+      .row()
+      .webApp("⬅️ رجوع", "admin_back");
+
+    await ctx.editMessageText(
+      "🔧 *الإعدادات*\n\n" +
+      "اختر الإعداد المطلوب:",
+      {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      }
+    );
+    await ctx.answerCallbackQuery();
+  } catch (e) {
+    log.error(`Admin settings error: ${e.message}`);
+    await ctx.reply("❌ خطأ في الإعدادات.");
+  }
+});
+
+// Bot integration handler
+bot.callbackQuery("admin_bot_integration", async (ctx) => {
+  try {
+    const userId = ctx.from.id.toString();
+    if (!isOwner(userId)) return ctx.reply("❌ هذا الأمر مخصص للمالك فقط!");
+
+    const keyboard = new InlineKeyboard()
+      .row()
+      .webApp("➕ ربط بوت جديد", "admin_add_bot")
+      .webApp("📋 قائمة البوتات", "admin_list_bots")
+      .row()
+      .webApp("⬅️ رجوع", "admin_back");
+
+    await ctx.editMessageText(
+      "🔗 *ربط البوتات*\n\n" +
+      "اختر العملية المطلوبة:",
+      {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      }
+    );
+    await ctx.answerCallbackQuery();
+  } catch (e) {
+    log.error(`Admin bot integration error: ${e.message}`);
+    await ctx.reply("❌ خطأ في ربط البوتات.");
+  }
+});
+
+// Add bot handler
+bot.callbackQuery("admin_add_bot", async (ctx) => {
+  try {
+    const userId = ctx.from.id.toString();
+    if (!isOwner(userId)) return ctx.reply("❌ هذا الأمر مخصص للمالك فقط!");
+
+    const keyboard = new InlineKeyboard()
+      .row()
+      .webApp("⬅️ رجوع", "admin_bot_integration");
+
+    await ctx.editMessageText(
+      "➕ *ربط بوت جديد*\n\n" +
+      "يرجى إرسال توكن البوت الجديد:\n" +
+      "`<bot_token>`",
+      {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      }
+    );
+    await ctx.answerCallbackQuery();
+  } catch (e) {
+    log.error(`Admin add bot error: ${e.message}`);
+    await ctx.reply("❌ خطأ في إضافة البوت.");
+  }
+});
+
+// List bots handler
+bot.callbackQuery("admin_list_bots", async (ctx) => {
+  try {
+    const userId = ctx.from.id.toString();
+    if (!isOwner(userId)) return ctx.reply("❌ هذا الأمر مخصص للمالك فقط!");
+
+    const keyboard = new InlineKeyboard()
+      .row()
+      .webApp("⬅️ رجوع", "admin_bot_integration");
+
+    // Load connections
+    const connections = require("./api").loadAPIKeys();
+    const bots = connections.connections || [];
+
+    let text = "📋 *قائمة البوتات المرتبطة*\n\n";
+    
+    if (bots.length === 0) {
+      text += "لا توجد بوتات مرتبطة حالياً.";
+    } else {
+      bots.forEach((bot, index) => {
+        text += `${index + 1}. 🤖 *${bot.botName || 'Bot'}*\n`;
+        text += `   نوع: ${bot.type || 'telegram'}\n`;
+        text += `   حالة: ${bot.status || 'unknown'}\n\n`;
+      });
+    }
+
+    await ctx.editMessageText(
+      text,
+      {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      }
+    );
+    await ctx.answerCallbackQuery();
+  } catch (e) {
+    log.error(`Admin list bots error: ${e.message}`);
+    await ctx.reply("❌ خطأ في عرض قائمة البوتات.");
+  }
+});
+
+bot.callbackQuery("admin_restart", async (ctx) => {
+  try {
+    const userId = ctx.from.id.toString();
+    if (!isOwner(userId)) return ctx.reply("❌ هذا الأمر مخصص للمالك فقط!");
+
+    const keyboard = new InlineKeyboard()
+      .row()
+      .webApp("🔄 إعادة تشغيل البوت", "admin_restart_bot")
+      .webApp("🛑 إيقاف البوت", "admin_shutdown_bot")
+      .row()
+      .webApp("⬅️ رجوع", "admin_back");
+
+    await ctx.editMessageText(
+      "🛑 *التحكم في البوت*\n\n" +
+      "اختر العملية المطلوبة:",
+      {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      }
+    );
+    await ctx.answerCallbackQuery();
+  } catch (e) {
+    log.error(`Admin restart error: ${e.message}`);
+    await ctx.reply("❌ خطأ في التحكم.");
+  }
+});
+
+bot.callbackQuery("admin_back", async (ctx) => {
+  try {
+    const keyboard = new InlineKeyboard()
+      .row()
+      .webApp("📊 حالة البوت", "admin_status")
+      .webApp("👥 إدارة المستخدمين", "admin_users")
+      .webApp("🔧 الإعدادات", "admin_settings")
+      .webApp("🛑 إيقاف/إعادة تشغيل", "admin_restart");
+
+    await ctx.editMessageText(
+      "👑 *لوحة تحكم الأدمن*\n\n" +
+      "اختر القسم المطلوب:\n" +
+      "• 📊 حالة البوت - عرض الإحصائيات\n" +
+      "• 👥 إدارة المستخدمين - الحظر/السماح\n" +
+      "• 🔧 الإعدادات - تعديل الإعدادات\n" +
+      "• 🛑 إيقاف/إعادة تشغيل - التحكم في البوت",
+      {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      }
+    );
+    await ctx.answerCallbackQuery();
+  } catch (e) {
+    log.error(`Admin back error: ${e.message}`);
+    await ctx.reply("❌ خطأ في الرجوع.");
   }
 });
 
