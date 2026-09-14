@@ -2058,6 +2058,8 @@ bot.callbackQuery("admin_settings", async (ctx) => {
       .webApp("🔘 الوضع المجاني", "admin_free_mode")
       .webApp("⏱️ الكولدون", "admin_cooldown")
       .row()
+      .webApp("🔗 ربط البوتات", "admin_bot_integration")
+      .row()
       .webApp("⬅️ رجوع", "admin_back");
 
     await ctx.editMessageText(
@@ -2072,6 +2074,100 @@ bot.callbackQuery("admin_settings", async (ctx) => {
   } catch (e) {
     log.error(`Admin settings error: ${e.message}`);
     await ctx.reply("❌ خطأ في الإعدادات.");
+  }
+});
+
+// Bot integration handler
+bot.callbackQuery("admin_bot_integration", async (ctx) => {
+  try {
+    const userId = ctx.from.id.toString();
+    if (!isOwner(userId)) return ctx.reply("❌ هذا الأمر مخصص للمالك فقط!");
+
+    const keyboard = new InlineKeyboard()
+      .row()
+      .webApp("➕ ربط بوت جديد", "admin_add_bot")
+      .webApp("📋 قائمة البوتات", "admin_list_bots")
+      .row()
+      .webApp("⬅️ رجوع", "admin_back");
+
+    await ctx.editMessageText(
+      "🔗 *ربط البوتات*\n\n" +
+      "اختر العملية المطلوبة:",
+      {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      }
+    );
+    await ctx.answerCallbackQuery();
+  } catch (e) {
+    log.error(`Admin bot integration error: ${e.message}`);
+    await ctx.reply("❌ خطأ في ربط البوتات.");
+  }
+});
+
+// Add bot handler
+bot.callbackQuery("admin_add_bot", async (ctx) => {
+  try {
+    const userId = ctx.from.id.toString();
+    if (!isOwner(userId)) return ctx.reply("❌ هذا الأمر مخصص للمالك فقط!");
+
+    const keyboard = new InlineKeyboard()
+      .row()
+      .webApp("⬅️ رجوع", "admin_bot_integration");
+
+    await ctx.editMessageText(
+      "➕ *ربط بوت جديد*\n\n" +
+      "يرجى إرسال توكن البوت الجديد:\n" +
+      "`<bot_token>`",
+      {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      }
+    );
+    await ctx.answerCallbackQuery();
+  } catch (e) {
+    log.error(`Admin add bot error: ${e.message}`);
+    await ctx.reply("❌ خطأ في إضافة البوت.");
+  }
+});
+
+// List bots handler
+bot.callbackQuery("admin_list_bots", async (ctx) => {
+  try {
+    const userId = ctx.from.id.toString();
+    if (!isOwner(userId)) return ctx.reply("❌ هذا الأمر مخصص للمالك فقط!");
+
+    const keyboard = new InlineKeyboard()
+      .row()
+      .webApp("⬅️ رجوع", "admin_bot_integration");
+
+    // Load connections
+    const connections = require("./api").loadAPIKeys();
+    const bots = connections.connections || [];
+
+    let text = "📋 *قائمة البوتات المرتبطة*\n\n";
+    
+    if (bots.length === 0) {
+      text += "لا توجد بوتات مرتبطة حالياً.";
+    } else {
+      bots.forEach((bot, index) => {
+        text += `${index + 1}. 🤖 *${bot.botName || 'Bot'}*\n`;
+        text += `   نوع: ${bot.type || 'telegram'}\n`;
+        text += `   حالة: ${bot.status || 'unknown'}\n\n`;
+      });
+    }
+
+    await ctx.editMessageText(
+      text,
+      {
+        parse_mode: "Markdown",
+        reply_markup: keyboard
+      }
+    );
+    await ctx.answerCallbackQuery();
+  } catch (e) {
+    log.error(`Admin list bots error: ${e.message}`);
+    await ctx.reply("❌ خطأ في عرض قائمة البوتات.");
   }
 });
 
