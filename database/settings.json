@@ -9,5 +9,10 @@
   "maxRetries": 3,
   "reconnectDelay": 2000,
   "lastUpdated": "2025-01-01T00:00:00.000Z",
-  "version": "4.0.0"
+  "version": "4.0.0",
+  "admins": [],
+  "permissions": {},
+  "maintenance": false,
+  "maintenanceMsg": "🛠️ البوت في وضع الصيانة. سنعود قريباً.",
+  "botImage": ""
 }
