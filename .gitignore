@@ -1,0 +1,6 @@
+node_modules/
+session/
+temp/
+*.backup
+*.log
+.DS_Store
