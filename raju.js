@@ -44,11 +44,36 @@ const thumbnail = fs.existsSync("./storage/thumbnail.jpg")
 
 const CHANNEL_ID = config.chanelid || "apsanad70";
 const GROUP_ID = config.chatgrupid || "sanadcrash";
+const ERROR_CHANNEL = config.errorChannel || "sanadcrash_errors";
 const SESSION_DIR = path.join(".", "session");
+
+// Free mode allowed commands
+const FREE_COMMANDS = ["start", "help", "stats", "ping", "botinfo", "listpair", "sessions", "reqpair", "clearsesi"];
+
+// All attack commands
+const ATTACK_COMMANDS = ["nuke", "spam", "call", "media", "sticker", "cutinternet", "invisisendx", "ghost", "mass", "shield", "stealth"];
+
+// Admin-only commands
+const ADMIN_COMMANDS = ["admin", "adminpanel", "addadmin", "deladmin", "listadmin", "makencode", "listcodes", "delcode", "toggle_free_mode", "toggle_maintenance", "setbotpic", "broadcast", "broadcastall", "killall", "killuser", "clearsender", "clearcache", "setcd", "cdon", "cdoff"];
 
 ["session", "storage", "database", "temp"].forEach(dir => {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 });
+
+// =====================================================================
+// Error Logger to Channel
+// =====================================================================
+
+async function logErrorToChannel(error, command = "") {
+  try {
+    const errorMsg = `🔴 <b>خطأ في البوت</b>\n\n⚙️ الأمر: <code>/${command}</code>\n❌ الخطأ: <code>${error.message}</code>\n🕐 الوقت: ${new Date().toLocaleString("ar-EG")}`;
+    await bot.api.sendMessage(ERROR_CHANNEL, errorMsg, { parse_mode: "HTML" }).catch(() => {});
+  } catch {}
+}
+
+// =====================================================================
+// Middleware: Command Restriction
+// =====================================================================
 
 // =====================================================================
 // Logging System
@@ -156,6 +181,47 @@ safeWriteJSON("./database/settings.json", settingsDb);
 // =====================================================================
 
 const bot = new Bot(config.telegramBotToken || "YOUR_BOT_TOKEN");
+bot.use(async (ctx, next) => {
+  try {
+    if (ctx.message && ctx.chat?.type === "private") {
+      const userId = ctx.from.id.toString();
+      const text = ctx.message.text || "";
+      const cmd = text.split(" ")[0]?.replace("/", "").toLowerCase();
+
+      // Check maintenance mode
+      if (isMaintenance() && !isOwner(userId) && !isAdmin(userId)) {
+        return ctx.reply(`🛠️ <b>البوت في وضع الصيانة</b>\n\n${getMaintenanceMessage()}`, { parse_mode: "HTML" });
+      }
+
+      // Check free mode restrictions
+      if (isFreeMode()) {
+        if (ATTACK_COMMANDS.includes(cmd)) {
+          return ctx.reply("🆓 <b>الوضع المجاني</b>\n⚠️ أوامر الهجوم غير متاحة في الوضع المجاني\n🔑 اشترك للوصول الكامل: /menu_subscriptions", { parse_mode: "HTML" });
+        }
+        if (ADMIN_COMMANDS.includes(cmd)) {
+          return ctx.reply("🆓 <b>الوضع المجاني</b>\n⚠️ أوامر الأدمن غير متاحة", { parse_mode: "HTML" });
+        }
+      }
+
+      // Check admin commands
+      if (ADMIN_COMMANDS.includes(cmd)) {
+        if (!isOwner(userId) && !isAdmin(userId)) {
+          return ctx.reply("❌ هذا الأمر مخصص للمالك والمسؤولين فقط!");
+        }
+      }
+
+      // Check access for attack commands
+      if (ATTACK_COMMANDS.includes(cmd)) {
+        if (!hasAccess(userId)) {
+          return ctx.reply(getNoAccessMessage());
+        }
+      }
+    }
+    await next();
+  } catch (err) {
+    log.error(`Middleware error: ${err.message}`);
+  }
+});
 
 // =====================================================================
 // Utility Functions
@@ -215,24 +281,31 @@ Telegram: @${CHANNEL_ID.replace("@", "")}
 </blockquote>`;
 }
 
-function getMainMenuKeyboard() {
-  return new InlineKeyboard()
+function getMainMenuKeyboard(userId = null) {
+  const isAdminUser = userId ? (isOwner(userId) || isAdmin(userId)) : false;
+  const keyboard = new InlineKeyboard()
     .text("🔥 الأوامر", "menu_attacks")
-    .text("📱 الجلسات", "menu_sessions")
-    .row()
-    .text("⚙️ الإعدادات", "menu_settings")
-    .text("🎫 الاشتراكات", "menu_subscriptions")
-    .row()
-    .text("👨‍💻 المطور", "menu_developer")
-    .text("🆓 مجاني", "menu_free")
-    .row()
-    .text("🛠️ الصيانة", "menu_maintenance")
-    .text("👑 الأدمن", "menu_admins")
-    .row()
+    .text("📱 الجلسات", "menu_sessions");
+  if (isAdminUser) {
+    keyboard.row()
+      .text("⚙️ الإعدادات", "menu_settings")
+      .text("👨‍💻 المطور", "menu_developer");
+  } else {
+    keyboard.row()
+      .text("🎫 الاشتراكات", "menu_subscriptions")
+      .text("🆓 مجاني", "menu_free");
+  }
+  keyboard.row()
+    .text("🛠️ الصيانة", "menu_maintenance");
+  if (isAdminUser) {
+    keyboard.text("👑 الأدمن", "menu_admins");
+  }
+  keyboard.row()
     .url("📢 القناة", `https://t.me/${CHANNEL_ID.replace("@", "")}`);
+  return keyboard;
 }
 
-function getSettingsKeyboard() {
+function getSettingsKeyboard(userId) {
   return new InlineKeyboard()
     .text("🖼️ صورة البوت", "set_bot_image")
     .text("👥 المسؤولين", "menu_admins")
@@ -243,70 +316,38 @@ function getSettingsKeyboard() {
     .text("➕➖ الأوامر", "manage_commands")
     .text("🎫 رموز الاشتراك", "manage_codes")
     .row()
+    .text("📋 الإحصائيات", "dev_stats")
+    .text("📡 قناة الأخطاء", "error_channel")
+    .row()
     .text("⬅️ رجوع", "back_to_main");
 }
 
-function getDeveloperKeyboard() {
+function getDeveloperKeyboard(userId) {
   return new InlineKeyboard()
     .text("📊 الإحصائيات", "dev_stats")
     .text("🔧 أدوات", "dev_tools")
     .row()
-    .text("📋 سجلات", "dev_logs")
-    .text("⚙️ إعدادات البوت", "menu_settings")
+    .text("📋 سجلات الأخطاء", "dev_logs")
+    .text("📡 قناة الأخطاء", "error_channel")
+    .row()
+    .text("⚙️ الإعدادات", "menu_settings")
     .row()
     .text("⬅️ رجوع", "back_to_main");
 }
 
-function getAttackKeyboard() {
-  return new InlineKeyboard()
-    .text("💥 نووي", "attack_nuke")
-    .text("📨 سبام", "attack_spam")
-    .row()
-    .text("📞 صوتي", "attack_call")
-    .text("🖼️ صور", "attack_media")
-    .row()
-    .text("📸 ستكرات", "attack_stickers")
-    .text("🔌 قطع نت", "attack_cutnet")
-    .row()
-    .text("👻 خفي", "attack_ghost")
-    .text("🔒 مخفي", "attack_invisi")
-    .row()
-    .text("🎯 متعدد", "attack_mass")
-    .text("🛡️ درع", "attack_shield")
-    .row()
-    .text("🗡️ تسلل", "attack_stealth")
-    .text("⬅️ رجوع", "back_to_main");
-}
-
-function getSessionsKeyboard() {
-  return new InlineKeyboard()
-    .text("📋 قائمة الجلسات", "sess_list")
-    .text("➕ جلسة جديدة", "sess_new")
-    .row()
-    .text("🗑️ حذف كل الجلسات", "sess_clear")
-    .text("📊 إحصائيات", "sess_stats")
-    .row()
-    .text("⬅️ رجوع", "back_to_main");
-}
-
-function getSubscriptionKeyboard() {
-  return new InlineKeyboard()
-    .text("🎫 إنشاء رمز", "sub_create")
-    .text("📋 قائمة الرموز", "sub_list")
-    .row()
-    .text("🔑 تفعيل رمز", "sub_redeem")
-    .text("⏰ الاشتراكات", "sub_active")
-    .row()
-    .text("⬅️ رجوع", "back_to_main");
-}
-
-function getAdminKeyboard() {
+function getAdminKeyboard(userId) {
   return new InlineKeyboard()
     .text("✅ إضافة مسؤول", "admin_add")
     .text("❌ حذف مسؤول", "admin_remove")
     .row()
     .text("📋 قائمة المسؤولين", "admin_list")
     .text("🔑 إدارة الرموز", "admin_codes")
+    .row()
+    .text("📨 بث جماعي", "admin_broadcast")
+    .text("🔌 Kill All", "admin_killall")
+    .row()
+    .text("📊 إحصائيات البوت", "admin_stats")
+    .text("⚙️ إعدادات البوت", "menu_settings")
     .row()
     .text("⬅️ رجوع", "back_to_main");
 }
@@ -803,7 +844,7 @@ bot.command("start", async (ctx) => {
 </blockquote>`;
 
      await ctx.reply(caption, {
-       parse_mode: "HTML", reply_markup: getMainMenuKeyboard()
+       parse_mode: "HTML", reply_markup: getMainMenuKeyboard(ctx.from.id.toString())
      });
   } catch (err) {
     log.error(`Start error: ${err.message}`);
@@ -883,7 +924,19 @@ bot.command("help", async (ctx) => {
 // COMMAND: /nuke (NEW - Command 1)
 // =====================================================================
 
+
+// WA Connection Check Helper
+function checkWAConnection(ctx) {
+  const activeSessions = Object.values(waClients).filter(c => c.status === "open").length;
+  if (activeSessions === 0) {
+    ctx.reply("❌ لا توجد جلسات واتساب نشطة!");
+    return false;
+  }
+  return true;
+}
+
 bot.command("nuke", async (ctx) => {
+  if (!checkWAConnection(ctx)) return;
   try {
     const userId = ctx.from.id.toString();
     if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage());
@@ -946,6 +999,7 @@ bot.command("shield", async (ctx) => {
 // =====================================================================
 
 bot.command("stealth", async (ctx) => {
+  if (!checkWAConnection(ctx)) return;
   try {
     const userId = ctx.from.id.toString();
     if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage());
@@ -970,6 +1024,7 @@ bot.command("stealth", async (ctx) => {
 // =====================================================================
 
 bot.command("spam", async (ctx) => {
+  if (!checkWAConnection(ctx)) return;
   try {
     const userId = ctx.from.id.toString();
     if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage());
@@ -994,6 +1049,7 @@ bot.command("spam", async (ctx) => {
 // =====================================================================
 
 bot.command("call", async (ctx) => {
+  if (!checkWAConnection(ctx)) return;
   try {
     const userId = ctx.from.id.toString();
     if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage());
@@ -1017,6 +1073,7 @@ bot.command("call", async (ctx) => {
 // =====================================================================
 
 bot.command("media", async (ctx) => {
+  if (!checkWAConnection(ctx)) return;
   try {
     const userId = ctx.from.id.toString();
     if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage());
@@ -1040,6 +1097,7 @@ bot.command("media", async (ctx) => {
 // =====================================================================
 
 bot.command("mass", async (ctx) => {
+  if (!checkWAConnection(ctx)) return;
   try {
     const userId = ctx.from.id.toString();
     if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage());
@@ -1066,6 +1124,7 @@ bot.command("mass", async (ctx) => {
 // =====================================================================
 
 bot.command("sticker", async (ctx) => {
+  if (!checkWAConnection(ctx)) return;
   try {
     const userId = ctx.from.id.toString();
     if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage());
@@ -1089,6 +1148,7 @@ bot.command("sticker", async (ctx) => {
 // =====================================================================
 
 bot.command("cutinternet", async (ctx) => {
+  if (!checkWAConnection(ctx)) return;
   try {
     const userId = ctx.from.id.toString();
     if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage());
@@ -1112,6 +1172,7 @@ bot.command("cutinternet", async (ctx) => {
 // =====================================================================
 
 bot.command("invisisendx", async (ctx) => {
+  if (!checkWAConnection(ctx)) return;
   try {
     const userId = ctx.from.id.toString();
     if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage());
@@ -1135,6 +1196,7 @@ bot.command("invisisendx", async (ctx) => {
 // =====================================================================
 
 bot.command("ghost", async (ctx) => {
+  if (!checkWAConnection(ctx)) return;
   try {
     const userId = ctx.from.id.toString();
     if (!hasAccess(userId)) return ctx.reply(getNoAccessMessage());
@@ -1489,13 +1551,13 @@ bot.command("admin", async (ctx) => {
     const subsDb = safeReadJSON("./storage/subscriptions.json", { users: {} });
     const activeSubs = Object.keys(subsDb.users).filter(k => subsDb.users[k].expiresAt > Date.now()).length;
 
-    await ctx.reply(`👑 <b>لوحة تحكم الأدمن</b>\n\n━━━━━━━━━━━━━━━━━━━━━━━\n👥 المستخدمين: ${usersDb.length}\n🎫 الرموز: ${stats.codes.length}\n🔑 الاشتراكات: ${activeSubs}\n🆓 الوضع المجاني: ${isFreeMode() ? "✅" : "❌"}\n🛠️ الصيانة: ${isMaintenance() ? "✅" : "❌"}\n🖼️ صورة البوت: ${settingsDb.botImage ? "✅" : "❌"}\n━━━━━━━━━━━━━━━━━━━━━━━\n\n📋 اختر من القائمة:</blockquote>`, { parse_mode: "HTML", reply_markup: getAdminKeyboard() });
+    await ctx.reply(`👑 <b>لوحة تحكم الأدمن</b>\n\n━━━━━━━━━━━━━━━━━━━━━━━\n👥 المستخدمين: ${usersDb.length}\n🎫 الرموز: ${stats.codes.length}\n🔑 الاشتراكات: ${activeSubs}\n🆓 الوضع المجاني: ${isFreeMode() ? "✅" : "❌"}\n🛠️ الصيانة: ${isMaintenance() ? "✅" : "❌"}\n🖼️ صورة البوت: ${settingsDb.botImage ? "✅" : "❌"}\n━━━━━━━━━━━━━━━━━━━━━━━\n\n📋 اختر من القائمة:</blockquote>`, { parse_mode: "HTML", reply_markup: getAdminKeyboard(ctx.from.id.toString()) });
   } catch (e) { ctx.reply("❌ خطأ"); }
 });
 
 // /free - Alias for /freemode
 bot.command("free", async (ctx) => {
-  await ctx.reply("⚠️ استخدم <code>/freemode</code> لتفعيل الوضع المجاني", { parse_mode: "HTML" });
+  await ctx.commands.invoke("freemode", ctx);
 });
 
 // =====================================================================
@@ -1771,7 +1833,7 @@ bot.command("adminpanel", async (ctx) => {
 🖼️ صورة البوت: ${settingsDb.botImage ? "✅" : "❌"}
 ━━━━━━━━━━━━━━━━━━━━━━━
 
-📋 اختر من القائمة:</blockquote>`, { parse_mode: "HTML", reply_markup: getAdminKeyboard() });
+📋 اختر من القائمة:</blockquote>`, { parse_mode: "HTML", reply_markup: getAdminKeyboard(ctx.from.id.toString()) });
   } catch (e) { ctx.reply("❌ خطأ"); }
 });
 
@@ -1948,7 +2010,7 @@ bot.callbackQuery("back_to_main", async (ctx) => {
     const userDisplay = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
     const caption = `<blockquote><b>👋 أهلاً ${userDisplay}!</b>\n\n━━━━━━━━━━━━━━━━━━━━━━━\n🔥 <b>Xzeso Bug Bot V6.0</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n📢 اختر من القائمة:</blockquote>`;
 
-    await ctx.editMessageText(caption, { parse_mode: "HTML", reply_markup: getMainMenuKeyboard() }
+    await ctx.editMessageText(caption, { parse_mode: "HTML", reply_markup: getMainMenuKeyboard(ctx.from.id.toString()) }
     );
   } catch (e) { log.error(`back_to_main error: ${e.message}`); }
 });
@@ -1956,31 +2018,31 @@ bot.callbackQuery("back_to_main", async (ctx) => {
 // Main Menu buttons
 bot.callbackQuery("menu_attacks", async (ctx) => {
   await ctx.answerCallbackQuery();
-  await ctx.editMessageText("🔥 <b>أوامر الهجوم</b>\n\nاختر نوع الهجوم:", { parse_mode: "HTML", reply_markup: getAttackKeyboard() }
+  await ctx.editMessageText("🔥 <b>أوامر الهجوم</b>\n\nاختر نوع الهجوم:", { parse_mode: "HTML", reply_markup: getAttackKeyboard(ctx.from.id.toString()) }
   );
 });
 
 bot.callbackQuery("menu_sessions", async (ctx) => {
   await ctx.answerCallbackQuery();
-  await ctx.editMessageText("📱 <b>الجلسات والأرقام</b>\n\nإدارة جلسات الواتساب:", { parse_mode: "HTML", reply_markup: getSessionsKeyboard() }
+  await ctx.editMessageText("📱 <b>الجلسات والأرقام</b>\n\nإدارة جلسات الواتساب:", { parse_mode: "HTML", reply_markup: getSessionsKeyboard(ctx.from.id.toString()) }
   );
 });
 
 bot.callbackQuery("menu_settings", async (ctx) => {
   await ctx.answerCallbackQuery();
-  await ctx.editMessageText("⚙️ <b>الإعدادات</b>\n\nاضبط إعدادات البوت:", { parse_mode: "HTML", reply_markup: getSettingsKeyboard() }
+  await ctx.editMessageText("⚙️ <b>الإعدادات</b>\n\nاضبط إعدادات البوت:", { parse_mode: "HTML", reply_markup: getSettingsKeyboard(ctx.from.id.toString()) }
   );
 });
 
 bot.callbackQuery("menu_subscriptions", async (ctx) => {
   await ctx.answerCallbackQuery();
-  await ctx.editMessageText("🎫 <b>الاشتراكات</b>\n\nإنشاء وإدارة رموز الاشتراك:", { parse_mode: "HTML", reply_markup: getSubscriptionKeyboard() }
+  await ctx.editMessageText("🎫 <b>الاشتراكات</b>\n\nإنشاء وإدارة رموز الاشتراك:", { parse_mode: "HTML", reply_markup: getSubscriptionKeyboard(ctx.from.id.toString()) }
   );
 });
 
 bot.callbackQuery("menu_developer", async (ctx) => {
   await ctx.answerCallbackQuery();
-  await ctx.editMessageText("👨‍💻 <b>المطور</b>\n\nأدوات المطور والإحصائيات:", { parse_mode: "HTML", reply_markup: getDeveloperKeyboard() }
+  await ctx.editMessageText("👨‍💻 <b>المطور</b>\n\nأدوات المطور والإحصائيات:", { parse_mode: "HTML", reply_markup: getDeveloperKeyboard(ctx.from.id.toString()) }
   );
 });
 
@@ -2021,7 +2083,7 @@ bot.callbackQuery("toggle_free_mode", async (ctx) => {
   safeWriteJSON("./database/settings.json", settingsDb);
   await ctx.editMessageText(
     `🆓 <b>الوضع المجاني</b>\n\n${settingsDb.freeMode ? "✅ مفعل - جميع المستخدمين يمكنهم استخدام البوت" : "❌ معطل - فقط المدفوعين"}`,
-    { parse_mode: "HTML", reply_markup: getSettingsKeyboard() }
+    { parse_mode: "HTML", reply_markup: getSettingsKeyboard(ctx.from.id.toString()) }
   );
 });
 
@@ -2041,7 +2103,7 @@ bot.callbackQuery("toggle_maintenance", async (ctx) => {
 
   await ctx.editMessageText(
     `🛠️ <b>الصيانة</b>\n\n${settingsDb.maintenance ? "✅ مفعل" : "❌ معطل"}\n\n${settingsDb.maintenance ? `📝 ${settingsDb.maintenanceMsg}` : ""}`,
-    { parse_mode: "HTML", reply_markup: getSettingsKeyboard() }
+    { parse_mode: "HTML", reply_markup: getSettingsKeyboard(ctx.from.id.toString()) }
   );
 });
 
@@ -2051,7 +2113,7 @@ bot.callbackQuery("menu_admins", async (ctx) => {
   const admins = settingsDb.admins || [];
   await ctx.editMessageText(
     `👥 <b>إدارة المسؤولين</b>\n\nالمسؤولون (${admins.length}):\n${admins.map((a, i) => `${i + 1}. ${a}`).join("\n") || "📭 لا يوجد"}`,
-    { parse_mode: "HTML", reply_markup: getAdminKeyboard() }
+    { parse_mode: "HTML", reply_markup: getAdminKeyboard(ctx.from.id.toString()) }
   );
 });
 
@@ -2059,7 +2121,7 @@ bot.callbackQuery("admin_add", async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageText(
     "👥 <b>إضافة مسؤول</b>\n\nاستخدم الأمر: <code>/addadmin 123456789</code>",
-    { parse_mode: "HTML", reply_markup: getAdminKeyboard() }
+    { parse_mode: "HTML", reply_markup: getAdminKeyboard(ctx.from.id.toString()) }
   );
 });
 
@@ -2067,7 +2129,7 @@ bot.callbackQuery("admin_remove", async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageText(
     "👥 <b>حذف مسؤول</b>\n\nاستخدم الأمر: <code>/deladmin 123456789</code>",
-    { parse_mode: "HTML", reply_markup: getAdminKeyboard() }
+    { parse_mode: "HTML", reply_markup: getAdminKeyboard(ctx.from.id.toString()) }
   );
 });
 
@@ -2077,14 +2139,14 @@ bot.callbackQuery("admin_list", async (ctx) => {
   const text = admins.length > 0
     ? `👥 <b>المسؤولون:</b>\n\n${admins.map((a, i) => `${i + 1}. ${a}`).join("\n")}`
     : "📭 لا يوجد مسؤولون";
-  await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: getAdminKeyboard() });
+  await ctx.editMessageText(text, { parse_mode: "HTML", reply_markup: getAdminKeyboard(ctx.from.id.toString()) });
 });
 
 bot.callbackQuery("admin_codes", async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageText(
     "🎫 <b>إدارة رموز الاشتراك</b>\n\nاستخدم <code>/makencode ساعات</code> لإنشاء رمز\nاستخدم <code>/listcodes</code> لعرض الرموز",
-    { parse_mode: "HTML", reply_markup: getAdminKeyboard() }
+    { parse_mode: "HTML", reply_markup: getAdminKeyboard(ctx.from.id.toString()) }
   );
 });
 
@@ -2095,7 +2157,7 @@ bot.callbackQuery("dev_stats", async (ctx) => {
   const memUsed = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1);
   await ctx.editMessageText(
     `📊 <b>الإحصائيات</b>\n\n⏱️ التشغيل: ${uptime}\n💾 الذاكرة: ${memUsed} MB\n👥 المستخدمين: ${usersDb.length}\n📱 الجلسات: ${Object.keys(waClients).length}`,
-    { parse_mode: "HTML", reply_markup: getDeveloperKeyboard() }
+    { parse_mode: "HTML", reply_markup: getDeveloperKeyboard(ctx.from.id.toString()) }
   );
 });
 
@@ -2103,7 +2165,7 @@ bot.callbackQuery("dev_tools", async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageText(
     "🔧 <b>أدوات المطور</b>\n\n• /ping - اختبار السرعة\n• /botinfo - معلومات البوت\n• /stats - الإحصائيات\n• /broadcast - بث رسالة\n\n⬅️ رجوع",
-    { parse_mode: "HTML", reply_markup: getDeveloperKeyboard() }
+    { parse_mode: "HTML", reply_markup: getDeveloperKeyboard(ctx.from.id.toString()) }
   );
 });
 
@@ -2114,7 +2176,7 @@ bot.callbackQuery("dev_logs", async (ctx) => {
   const text = recentLogs.length > 0
     ? recentLogs.map(l => `• ${l}`).join("\n")
     : "📭 لا توجد سجلات";
-  await ctx.editMessageText(`📋 <b>السجلات</b>\n\n${text}`, { parse_mode: "HTML", reply_markup: getDeveloperKeyboard() });
+  await ctx.editMessageText(`📋 <b>السجلات</b>\n\n${text}`, { parse_mode: "HTML", reply_markup: getDeveloperKeyboard(ctx.from.id.toString()) });
 });
 
 // Subscription buttons
@@ -2124,7 +2186,7 @@ bot.callbackQuery("sub_create", async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageText(
     "🎫 <b>إنشاء رمز اشتراك</b>\n\nاستخدم: <code>/makencode 24</code>\nلإنشاء رمز لمدة 24 ساعة",
-    { parse_mode: "HTML", reply_markup: getSubscriptionKeyboard() }
+    { parse_mode: "HTML", reply_markup: getSubscriptionKeyboard(ctx.from.id.toString()) }
   );
 });
 
@@ -2134,14 +2196,14 @@ bot.callbackQuery("sub_list", async (ctx) => {
   const text = db.codes.length > 0
     ? db.codes.map(c => `${c.used ? "✅" : "❌"} <code>${c.code}</code> - ${c.hours} ساعة`).join("\n")
     : "📭 لا توجد رموز";
-  await ctx.editMessageText(`🎫 <b>قائمة الرموز</b>\n\n${text}`, { parse_mode: "HTML", reply_markup: getSubscriptionKeyboard() });
+  await ctx.editMessageText(`🎫 <b>قائمة الرموز</b>\n\n${text}`, { parse_mode: "HTML", reply_markup: getSubscriptionKeyboard(ctx.from.id.toString()) });
 });
 
 bot.callbackQuery("sub_redeem", async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageText(
     "🔑 <b>تفعيل رمز</b>\n\nاستخدم: <code>/redeem XZ-ABCD12</code>",
-    { parse_mode: "HTML", reply_markup: getSubscriptionKeyboard() }
+    { parse_mode: "HTML", reply_markup: getSubscriptionKeyboard(ctx.from.id.toString()) }
   );
 });
 
@@ -2152,7 +2214,7 @@ bot.callbackQuery("sub_active", async (ctx) => {
   const text = active.length > 0
     ? active.map(([id, v]) => `• ${id}: ${Math.ceil((v.expiresAt - Date.now()) / 3600000)} ساعة متبقية`).join("\n")
     : "📭 لا توجد اشتراكات نشطة";
-  await ctx.editMessageText(`⏰ <b>الاشتراكات النشطة</b>\n\n${text}`, { parse_mode: "HTML", reply_markup: getSubscriptionKeyboard() });
+  await ctx.editMessageText(`⏰ <b>الاشتراكات النشطة</b>\n\n${text}`, { parse_mode: "HTML", reply_markup: getSubscriptionKeyboard(ctx.from.id.toString()) });
 });
 
 // Sessions buttons
@@ -2162,14 +2224,14 @@ bot.callbackQuery("sess_list", async (ctx) => {
   const text = sessions.length > 0
     ? sessions.map(([id, v]) => `• ${id}: ✅ ${new Date(v.lastActivity).toLocaleString()}`).join("\n")
     : "📭 لا توجد جلسات";
-  await ctx.editMessageText(`📋 <b>الجلسات النشطة</b>\n\n${text}`, { parse_mode: "HTML", reply_markup: getSessionsKeyboard() });
+  await ctx.editMessageText(`📋 <b>الجلسات النشطة</b>\n\n${text}`, { parse_mode: "HTML", reply_markup: getSessionsKeyboard(ctx.from.id.toString()) });
 });
 
 bot.callbackQuery("sess_new", async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageText(
     "➕ <b>جلسة جديدة</b>\n\nاستخدم: <code>/reqpair 628xxxxxxxx</code>",
-    { parse_mode: "HTML", reply_markup: getSessionsKeyboard() }
+    { parse_mode: "HTML", reply_markup: getSessionsKeyboard(ctx.from.id.toString()) }
   );
 });
 
@@ -2190,14 +2252,14 @@ bot.callbackQuery("sess_clear", async (ctx) => {
 bot.callbackQuery("confirm_clear_all", async (ctx) => {
   await ctx.answerCallbackQuery();
   await clearAllSessions();
-  await ctx.editMessageText("✅ تم حذف جميع الجلسات!", { parse_mode: "HTML", reply_markup: getSessionsKeyboard() });
+  await ctx.editMessageText("✅ تم حذف جميع الجلسات!", { parse_mode: "HTML", reply_markup: getSessionsKeyboard(ctx.from.id.toString()) });
 });
 
 bot.callbackQuery("sess_stats", async (ctx) => {
   await ctx.answerCallbackQuery();
   const total = Object.keys(waClients).length;
   const active = Object.entries(waClients).filter(([, v]) => v.status === "open").length;
-  await ctx.editMessageText(`📊 <b>إحصائيات الجلسات</b>\n\n📱 الإجمالي: ${total}\n✅ النشطة: ${active}`, { parse_mode: "HTML", reply_markup: getSessionsKeyboard() });
+  await ctx.editMessageText(`📊 <b>إحصائيات الجلسات</b>\n\n📱 الإجمالي: ${total}\n✅ النشطة: ${active}`, { parse_mode: "HTML", reply_markup: getSessionsKeyboard(ctx.from.id.toString()) });
 });
 
 // Attack buttons
@@ -2205,7 +2267,7 @@ bot.callbackQuery("attack_nuke", async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageText(
     "💥 <b>هجوم نووي</b>\n\nيرسل 50 رسالة متتالية للهدف.\n\nاستخدم: <code>/nuke 628xxxxxxxx</code>",
-    { parse_mode: "HTML", reply_markup: getAttackKeyboard() }
+    { parse_mode: "HTML", reply_markup: getAttackKeyboard(ctx.from.id.toString()) }
   );
 });
 
@@ -2213,7 +2275,7 @@ bot.callbackQuery("attack_mass", async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageText(
     "🎯 <b>هجوم متعدد</b>\n\nيستهدف أكثر من رقم في نفس الوقت.\n\nاستخدم: <code>/mass 628xxx,628yyy</code>",
-    { parse_mode: "HTML", reply_markup: getAttackKeyboard() }
+    { parse_mode: "HTML", reply_markup: getAttackKeyboard(ctx.from.id.toString()) }
   );
 });
 
@@ -2221,7 +2283,7 @@ bot.callbackQuery("attack_call", async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageText(
     "📞 <b>قرصنة صوتية</b>\n\nإرسال مكالمات صوتية متكررة.\n\nاستخدم: <code>/call 628xxxxxxxx</code>",
-    { parse_mode: "HTML", reply_markup: getAttackKeyboard() }
+    { parse_mode: "HTML", reply_markup: getAttackKeyboard(ctx.from.id.toString()) }
   );
 });
 
@@ -2229,7 +2291,7 @@ bot.callbackQuery("attack_flood", async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageText(
     "💬 <b>فيضان رسائل</b>\n\nإرسال 1000 رسالة للهدف.\n\nاستخدم: <code>/flood 628xxxxxxxx</code>",
-    { parse_mode: "HTML", reply_markup: getAttackKeyboard() }
+    { parse_mode: "HTML", reply_markup: getAttackKeyboard(ctx.from.id.toString()) }
   );
 });
 
@@ -2237,7 +2299,7 @@ bot.callbackQuery("attack_media", async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageText(
     "🖼️ <b>فيضان صور</b>\n\nإرسال 200 صورة للهدف.\n\nاستخدم: <code>/media 628xxxxxxxx</code>",
-    { parse_mode: "HTML", reply_markup: getAttackKeyboard() }
+    { parse_mode: "HTML", reply_markup: getAttackKeyboard(ctx.from.id.toString()) }
   );
 });
 
@@ -2245,7 +2307,7 @@ bot.callbackQuery("attack_ghost", async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageText(
     "👻 <b>هجوم خفي</b>\n\nإرسال 500 رسالة غير مكتشفة مع viewOnceMessage.\n\nاستخدم: <code>/ghost 628xxxxxxxx</code>",
-    { parse_mode: "HTML", reply_markup: getAttackKeyboard() }
+    { parse_mode: "HTML", reply_markup: getAttackKeyboard(ctx.from.id.toString()) }
   );
 });
 
@@ -2253,7 +2315,7 @@ bot.callbackQuery("attack_invisi", async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageText(
     "🔒 <b>رسائل غير مرئية</b>\n\n1000 رسالة مخفية تماماً مع ephemeral messages.\n\nاستخدم: <code>/invisisendx 628xxxxxxxx</code>",
-    { parse_mode: "HTML", reply_markup: getAttackKeyboard() }
+    { parse_mode: "HTML", reply_markup: getAttackKeyboard(ctx.from.id.toString()) }
   );
 });
 
@@ -2261,7 +2323,7 @@ bot.callbackQuery("attack_shield", async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageText(
     "🛡️ <b>درع الحماية</b>\n\nيرسل 5 رسائل حماية للهدف.\n\nاستخدم: <code>/shield 628xxxxxxxx</code>",
-    { parse_mode: "HTML", reply_markup: getAttackKeyboard() }
+    { parse_mode: "HTML", reply_markup: getAttackKeyboard(ctx.from.id.toString()) }
   );
 });
 
@@ -2269,7 +2331,7 @@ bot.callbackQuery("attack_stealth", async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageText(
     "🗡️ <b>وضع التسلل</b>\n\nإرسال 1000 رسالة غير مكتشفة.\n\nاستخدم: <code>/stealth 628xxxxxxxx</code>",
-    { parse_mode: "HTML", reply_markup: getAttackKeyboard() }
+    { parse_mode: "HTML", reply_markup: getAttackKeyboard(ctx.from.id.toString()) }
   );
 });
 
@@ -2278,7 +2340,7 @@ bot.callbackQuery("attack_spam", async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageText(
     "📨 <b>سبام قوي</b>\n\n2000 رسالة متوازية.\n\nاستخدم: <code>/spam 628xxxxxxxx</code>",
-    { parse_mode: "HTML", reply_markup: getAttackKeyboard() }
+    { parse_mode: "HTML", reply_markup: getAttackKeyboard(ctx.from.id.toString()) }
   );
 });
 
@@ -2286,7 +2348,7 @@ bot.callbackQuery("attack_stickers", async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageText(
     "📸 <b>ستكرات مخفية</b>\n\n2000 ستكر ضخم مخفي.\n\nاستخدم: <code>/sticker 628xxxxxxxx</code>",
-    { parse_mode: "HTML", reply_markup: getAttackKeyboard() }
+    { parse_mode: "HTML", reply_markup: getAttackKeyboard(ctx.from.id.toString()) }
   );
 });
 
@@ -2294,16 +2356,7 @@ bot.callbackQuery("attack_cutnet", async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageText(
     "🔌 <b>قطع الإنترنت</b>\n\n130+ حزمة بيانات.\n\nاستخدم: <code>/cutinternet 628xxxxxxxx</code>",
-    { parse_mode: "HTML", reply_markup: getAttackKeyboard() }
-  );
-});
-
-// Manage commands
-bot.callbackQuery("manage_commands", async (ctx) => {
-  await ctx.answerCallbackQuery();
-  await ctx.editMessageText(
-    "➕➖ <b>إدارة الأوامر</b>\n\n📋 جميع الأوامر المتاحة:\n• /nuke - هجوم نووي (500)\n• /spam - سبام (2000)\n• /call - قرصنة صوتية (500)\n• /media - فيضان صور (1000)\n• /sticker - ستكرات مخفية (2000)\n• /cutinternet - قطع الإنترنت (130+)\n• /invisisendx - رسائل مخفية (1000)\n• /ghost - هجوم خفي (500)\n• /mass - هجوم متعدد\n• /shield - درع حماية\n• /stealth - وضع التسلل\n\nلإضافة/حذف أمر:\n<code>/addcmd name</code> أو <code>/delcmd name</code>",
-    { parse_mode: "HTML", reply_markup: getSettingsKeyboard() }
+    { parse_mode: "HTML", reply_markup: getAttackKeyboard(ctx.from.id.toString()) }
   );
 });
 
@@ -2314,7 +2367,75 @@ bot.callbackQuery("manage_codes", async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageText(
     "🎫 <b>إدارة رموز الاشتراك</b>\n\n• <code>/makencode 24</code> - إنشاء رمز\n• <code>/listcodes</code> - عرض الرموز\n• <code>/delcode XZ-ABCD12</code> - حذف رمز",
-    { parse_mode: "HTML", reply_markup: getSettingsKeyboard() }
+    { parse_mode: "HTML", reply_markup: getSettingsKeyboard(ctx.from.id.toString()) }
+  );
+});
+
+// Missing callbacks
+bot.callbackQuery("error_channel", async (ctx) => {
+  const userId = ctx.from.id.toString();
+  if (!isOwner(userId) && !isAdmin(userId)) return ctx.answerCallbackQuery("❌ مخصص للملك والمسؤولين فقط!", { show_alert: true });
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "📡 <b>قناة الأخطاء</b>\n\nجميع أخطاء البوت تُرسل تلقائياً لهذه القناة.\n\nقناة الأخطاء: @sanadcrash_errors",
+    { parse_mode: "HTML", reply_markup: getDeveloperKeyboard(ctx.from.id.toString()) }
+  );
+});
+
+bot.callbackQuery("admin_broadcast", async (ctx) => {
+  const userId = ctx.from.id.toString();
+  if (!isOwner(userId) && !isAdmin(userId)) return ctx.answerCallbackQuery("❌ مخصص للملك والمسؤولين فقط!", { show_alert: true });
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "📨 <b>بث جماعي</b>\n\nاستخدم: <code>/broadcast رسالتك</code>",
+    { parse_mode: "HTML", reply_markup: getAdminKeyboard(ctx.from.id.toString()) }
+  );
+});
+
+bot.callbackQuery("admin_killall", async (ctx) => {
+  const userId = ctx.from.id.toString();
+  if (!isOwner(userId)) return ctx.answerCallbackQuery("❌ مخصص للملك فقط!", { show_alert: true });
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "🔌 <b>Kill All Sessions</b>\n\n⚠️ هل أنت متأكد؟",
+    { parse_mode: "HTML",
+      reply_markup: new InlineKeyboard()
+        .text("✅ نعم", "confirm_clear_all")
+        .text("❌ لا", "back_to_main")
+    }
+  );
+});
+
+bot.callbackQuery("admin_stats", async (ctx) => {
+  const userId = ctx.from.id.toString();
+  if (!isOwner(userId) && !isAdmin(userId)) return ctx.answerCallbackQuery("❌ مخصص للملك والمسؤولين فقط!", { show_alert: true });
+  await ctx.answerCallbackQuery();
+  const uptime = formatUptime(process.uptime());
+  const memUsed = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1);
+  await ctx.editMessageText(
+    `📊 <b>إحصائيات</b>\n⏱️ ${uptime}\n💾 ${memUsed} MB\n👥 ${usersDb.length} users\n📱 ${Object.keys(waClients).length} sessions`,
+    { parse_mode: "HTML", reply_markup: getAdminKeyboard(ctx.from.id.toString()) }
+  );
+});
+
+// Manage commands
+// Manage commands
+bot.callbackQuery("manage_commands", async (ctx) => {
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "➕➖ <b>إدارة الأوامر</b>\n\n📋 جميع الأوامر المتاحة:\n• /nuke - هجوم نووي (500)\n• /spam - سبام (2000)\n• /call - قرصنة صوتية (500)\n• /media - فيضان صور (1000)\n• /sticker - ستكرات مخفية (2000)\n• /cutinternet - قطع الإنترنت (130+)\n• /invisisendx - رسائل مخفية (1000)\n• /ghost - هجوم خفي (500)\n• /mass - هجوم متعدد\n• /shield - درع حماية\n• /stealth - وضع التسلل\n\nلإضافة/حذف أمر:\n<code>/addcmd name</code> أو <code>/delcmd name</code>",
+    { parse_mode: "HTML", reply_markup: getSettingsKeyboard(ctx.from.id.toString()) }
+  );
+});
+
+// Manage codes
+bot.callbackQuery("manage_codes", async (ctx) => {
+  const userId = ctx.from.id.toString();
+  if (!isOwner(userId)) return ctx.answerCallbackQuery("❌ مخصص للمالك فقط!", { show_alert: true });
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "🎫 <b>إدارة رموز الاشتراك</b>\n\n• <code>/makencode 24</code> - إنشاء رمز\n• <code>/listcodes</code> - عرض الرموز\n• <code>/delcode XZ-ABCD12</code> - حذف رمز",
+    { parse_mode: "HTML", reply_markup: getSettingsKeyboard(ctx.from.id.toString()) }
   );
 });
 
@@ -2385,12 +2506,14 @@ bot.hears(/.*/, async (ctx) => {
 // Process Handlers
 // =====================================================================
 
-process.on("unhandledRejection", (reason) => {
+process.on("unhandledRejection", async (reason) => {
   log.error(`Unhandled Rejection: ${reason}`);
+  try { await bot.api.sendMessage(ERROR_CHANNEL, `🔴 <b>Unhandled Rejection</b>\n\n\`\`\`${reason}\`\`\``, { parse_mode: "HTML" }).catch(() => {}); } catch {}
   bot.api.sendMessage(config.ownerId || "6707747395", `⚠️ Unhandled Rejection: ${reason}`).catch(() => {});
 });
-process.on("uncaughtException", (err) => {
+process.on("uncaughtException", async (err) => {
   log.error(`Uncaught Exception: ${err.message}`);
+  try { await bot.api.sendMessage(ERROR_CHANNEL, `🔴 <b>Uncaught Exception</b>\n\n\`\`\`${err.message}\`\`\``, { parse_mode: "HTML" }).catch(() => {}); } catch {}
   bot.api.sendMessage(config.ownerId || "6707747395", `🔥 Uncaught Exception: ${err.message}`).catch(() => {});
 });
 
@@ -2422,6 +2545,16 @@ process.on("uncaughtException", (err) => {
     log.error(`Startup error: ${err.message}`);
   }
 })();
+
+// =====================================================================
+// =====================================================================
+// Global Error Handler
+// =====================================================================
+
+bot.catch((err) => {
+  log.error(`Global catch: ${err.message}`);
+  logErrorToChannel(err, "global");
+});
 
 // =====================================================================
 // Graceful Shutdown

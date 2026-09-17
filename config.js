@@ -25,6 +25,7 @@ module.exports = {
   
   // معرف القناة (بدون @)
   chanelid: process.env.CHANNEL_ID || "apsanad70",
+  errorChannel: process.env.ERROR_CHANNEL || "sanadcrash_errors",
   
   // معرف المجموعة (بدون @)
   chatgrupid: process.env.GROUP_ID || "sanadcrash",
